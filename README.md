@@ -20,7 +20,7 @@ Nel browser di chi le fa (localStorage). Non vanno perse se chiudi la pagina. Se
 ## Cosa non può fare un sito statico
 
 - Leggere i prezzi dai siti delle compagnie aeree, di Cruz del Sur, PeruRail e simili: i siti li bloccano. Per questo ci sono i link ufficiali e campi dove scrivere il prezzo visto, che il sito ricorda per ogni combinazione di bagagli.
-- Leggere il cambio da Il Sole 24 Ore: non c'è un servizio pubblico. Il cambio automatico arriva da ExchangeRate-API e si può sostituire a mano.
+- Il cambio (soles e dollari) arriva in automatico da ExchangeRate-API.
 - Le date di apertura delle prenotazioni vanno confermate sui siti ufficiali e scritte nella sezione "Da prenotare".
 
 ## Importi segnati "stima"
@@ -31,8 +31,13 @@ Sono segnaposto miei: pisco, tour in giornata sul Titicaca, ingressi Vinicunca, 
 
 1. In Supabase apri SQL Editor, incolla il contenuto di `supabase.sql` e premi Run.
 2. `config.js` contiene l'indirizzo del progetto e la chiave pubblica (publishable).
-3. Apri il sito, in fondo alla pagina premi "Crea un nuovo codice", poi "Copia il link da condividere" e mandalo all'altra persona.
+3. Apri il sito, in fondo alla pagina premi "Impostazioni", poi "Crea un nuovo codice", poi "Copia il link da condividere" e mandalo all'altra persona.
 4. I due dispositivi si aggiornano da soli ogni pochi secondi. Se due persone salvano insieme, vince la versione già salvata e il sito avvisa.
 
 Chi ha il link può modificare il viaggio: non pubblicarlo. Nel progetto Supabase non mettere dati sensibili.
 Il piano gratuito mette in pausa il progetto dopo una settimana senza attività: si riattiva con un clic dalla dashboard e i dati restano.
+
+## Mappa e altimetria
+
+- Altimetria: due viste, "Pernottamenti" e "Completa" (tutte le tappe con spostamento). Le altitudini sono indicative, e si modificano in `data.js` (campo `stops` di ogni giorno).
+- Mappa: ogni spostamento ha il suo mezzo (aereo, auto, bus, treno, barca, a piedi), con la luna per i tragitti di notte. Le strade di auto e bus sono calcolate al volo da OpenStreetMap (servizio pubblico OSRM) e ricordate nel browser. Se non si caricano, la mappa mostra linee dritte e la tabella ha il link a Google Maps per ogni tratto.
