@@ -14,9 +14,9 @@ const DEFAULT = {
   cfg: { imm: 90, taxi: 90, comfort: 60 },
   lima: { start: 'auto', end: 'yes' },
   ex: {}, custom: [], items: {}, notes: {},
-  rate: { pen: 3.8728, src: 'valore del tuo Excel', ts: null, manual: false },
+  rate: { pen: 3.8728, usd: 1.1477, src: 'valore del tuo Excel', ts: null },
   fare: { p: {}, use: {}, extra: { intl: [], dom: [] } },
-  ui: { tab: 'itin', open: {} }
+  ui: { tab: 'itin', open: {}, prof: 'night' }
 };
 EXTRAS.forEach(e => { DEFAULT.ex[e.id] = !!e.def; });
 
@@ -73,7 +73,7 @@ function toExtra(c) {
   const costs = [];
   if (c.amt != null && c.amt !== '') {
     const cost = { id: c.id + '_c', label: c.title, scope: c.scope || 'pp', cat: 'Attività' };
-    cost[c.cur === 'PEN' ? 'pen' : 'eur'] = +c.amt;
+    cost[c.cur === 'PEN' ? 'pen' : (c.cur === 'USD' ? 'usd' : 'eur')] = +c.amt;
     if (c.book) cost.book = { site: c.site || 'Sito da indicare', url: c.url || '', rec: +c.rec || 0, open: c.open || '' };
     costs.push(cost);
   }
@@ -114,9 +114,12 @@ function buildDays(S0) {
 }
 
 /* ---------- costi ---------- */
-const curOf = c => c.pen != null ? 'PEN' : 'EUR';
-const nativeAmt = (S0, c) => { const o = S0.items[c.id] || {}; return o.amt != null ? o.amt : (c.pen != null ? c.pen : c.eur); };
-const unitEur = (S0, c) => { const a = nativeAmt(S0, c); return curOf(c) === 'PEN' ? a / S0.rate.pen : a; };
+const baseCur = c => c.pen != null ? 'PEN' : (c.usd != null ? 'USD' : 'EUR');
+const curOf = (S0, c) => (S0.items[c.id] && S0.items[c.id].cur) || baseCur(c);
+const nativeAmt = (S0, c) => { const o = S0.items[c.id] || {}; return o.amt != null ? o.amt : (c.pen != null ? c.pen : (c.usd != null ? c.usd : c.eur)); };
+const toEur = (S0, cur, a) => cur === 'PEN' ? a / S0.rate.pen : (cur === 'USD' ? a / S0.rate.usd : a);
+const unitEur = (S0, c) => toEur(S0, curOf(S0, c), nativeAmt(S0, c));
+const fmtNative = (S0, c) => { const cu = curOf(S0, c), a = nativeAmt(S0, c); return cu === 'PEN' ? solFmt(a) : (cu === 'USD' ? '$ ' + nfp.format(a) : eur2(a)); };
 const lineEst = (S0, c) => unitEur(S0, c) * (c.scope === 'pp' ? S0.persons : 1);
 const isPaid = (S0, c) => { const o = S0.items[c.id] || {}; return o.paid != null && o.paid !== ''; };
 const lineEur = (S0, c) => isPaid(S0, c) ? +S0.items[c.id].paid : lineEst(S0, c);
@@ -219,8 +222,13 @@ function hero() {
       <div class="stat"><b>${eur0(T.paid)}</b><span>già pagato</span></div>
       <div class="stat"><b>${nfp.format(S.rate.pen)}</b><span>soles per 1 €</span></div>
     </div>
-    <div class="profile">${profileSVG(days)}</div>
-    <p class="small" style="margin:6px 0 0">Il profilo mostra l’altitudine di ogni pernottamento: toccando un giorno si apre il programma. ${legend(days)}</p>
+    <div class="inl" style="margin:16px 0 6px"><b class="disp" style="font-size:18px">Altimetria</b>
+      <div role="group" aria-label="Tipo di altimetria"><button class="btn sm ${S.ui.prof === 'night' ? '' : 'ghost'}" data-act="prof" data-v="night" aria-pressed="${S.ui.prof === 'night'}">Pernottamenti</button>
+      <button class="btn sm ${S.ui.prof === 'full' ? '' : 'ghost'}" data-act="prof" data-v="full" aria-pressed="${S.ui.prof === 'full'}">Completa</button></div></div>
+    <div class="profile">${S.ui.prof === 'full' ? profileFull(days) : profileSVG(days)}</div>
+    <p class="small" style="margin:6px 0 0">${S.ui.prof === 'full'
+      ? 'Tutte le tappe del programma in ordine, giorno per giorno. Le altitudini sono indicative (da fonti turistiche), i giorni senza spostamenti non compaiono. Scorri di lato e tocca un giorno per aprirlo.'
+      : 'Altitudine di ogni pernottamento: toccando un giorno si apre il programma.'} ${legend(days)}</p>
   </header>`;
 }
 function legend(days) {
@@ -261,6 +269,35 @@ function profileSVG(days) {
   return s + '</svg>';
 }
 
+
+function profileFull(days) {
+  const stops = [];
+  days.forEach(d => (d.stops || []).forEach(st => { const last = stops[stops.length - 1]; if (last && last.n === st[0]) return; stops.push({ n: st[0], alt: st[1], d }); }));
+  if (stops.length < 2) return '<p class="small">Nessuna tappa con spostamenti.</p>';
+  const step = 56, Lm = 48, Rm = 24, T = 140, B = 74, H = 420, W = Lm + Rm + step * stops.length, maxA = 5200;
+  const X = i => Lm + step * (i + .5), Y = a => T + (H - T - B) * (1 - a / maxA);
+  let s = `<svg class="full" style="width:${W}px;max-width:none" viewBox="0 0 ${W} ${H}" role="img" aria-label="Altimetria completa di tutte le tappe del programma">`;
+  // fasce dei giorni
+  let i = 0;
+  while (i < stops.length) {
+    let j = i; while (j + 1 < stops.length && stops[j + 1].d === stops[i].d) j++;
+    const d = stops[i].d, x0 = Lm + step * i, w = step * (j - i + 1);
+    s += `<a data-act="goday" data-id="${d.id}" tabindex="0" role="link" aria-label="Giorno ${d.n}: ${esc(d.title)}"><title>Giorno ${d.n}: ${esc(d.title)}</title><rect class="band" x="${x0}" y="${T - 30}" width="${w}" height="${H - T - B + 30}" fill="${REGIONS[d.region].color}" opacity=".18" stroke="#EDF1EF" stroke-width="2"/></a>`;
+    s += `<text x="${x0 + w / 2}" y="${H - 34}" text-anchor="middle" font-size="12" font-weight="600" fill="#17272F">Giorno ${d.n}</text>`;
+    if (d.date) s += `<text x="${x0 + w / 2}" y="${H - 16}" text-anchor="middle" font-size="10.5" fill="#586870">${d.date.getDate()}/${d.date.getMonth() + 1}</text>`;
+    i = j + 1;
+  }
+  [0, 2000, 4000].forEach(a => { s += `<line x1="${Lm}" x2="${W - Rm}" y1="${Y(a)}" y2="${Y(a)}" stroke="#9AAAA3" stroke-width="1" stroke-dasharray="3 5"/><text x="${Lm - 7}" y="${Y(a) + 4}" text-anchor="end" font-size="11" fill="#586870">${a} m</text>`; });
+  s += `<polyline fill="none" stroke="#17272F" stroke-width="2.5" stroke-linejoin="round" points="${stops.map((p, k) => X(k).toFixed(1) + ',' + Y(p.alt).toFixed(1)).join(' ')}"/>`;
+  stops.forEach((p, k) => {
+    const x = X(k), y = Y(p.alt), high = p.alt >= 4500;
+    s += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4" fill="${high ? '#B83D6A' : '#fff'}" stroke="${high ? '#B83D6A' : '#17272F'}" stroke-width="2"/>`;
+    s += `<text transform="translate(${(x + 4).toFixed(1)},${(y - 12).toFixed(1)}) rotate(-52)" font-size="11.5" font-weight="600" fill="#17272F" style="paint-order:stroke" stroke="#EDF1EF" stroke-width="3.5">${esc(p.n)}</text>`;
+    s += `<text x="${x.toFixed(1)}" y="${(y + 17).toFixed(1)}" text-anchor="middle" font-size="10" fill="#586870" style="paint-order:stroke" stroke="#EDF1EF" stroke-width="3">${p.alt}</text>`;
+  });
+  return s + '</svg>';
+}
+
 /* ----- tab: itinerario ----- */
 function itinTab() {
   const { days } = CTX;
@@ -291,7 +328,7 @@ function dayBody(d) {
   if (['cusco_lima', 'rientro', 'rientro_diretto'].includes(d.id)) banner = `<div class="warn">${esc(endMsg(D))}</div>`;
   const rows = d.costs.map(c => {
     const paid = isPaid(S, c);
-    const base = curOf(c) === 'PEN' ? `${solFmt(nativeAmt(S, c))} ≈ ${eur2(unitEur(S, c))}` : eur2(nativeAmt(S, c));
+    const base = curOf(S, c) === 'EUR' ? eur2(nativeAmt(S, c)) : `${fmtNative(S, c)} ≈ ${eur2(unitEur(S, c))}`;
     return `<tr><td>${esc(c.label)}${c.est ? '<span class="esttag">stima</span>' : ''}${paid ? '<span class="paidtag">pagato</span>' : ''}<br><span class="small">${base} ${c.scope === 'pp' ? 'a testa' : 'in ' + S.persons}</span></td><td>${eur2(lineEur(S, c))}</td></tr>`;
   }).join('');
   return `<div class="cols">
@@ -401,25 +438,23 @@ function costiTab() {
   const L = T.L;
   const byCat = CATS.map(c => { const rows = L.filter(x => x.cat === c); const tot = rows.reduce((a, x) => a + lineEur(S, x), 0), paid = rows.filter(x => isPaid(S, x)).reduce((a, x) => a + lineEur(S, x), 0); return { c, tot, paid }; }).filter(r => r.tot > 0);
   const rateTs = S.rate.ts ? new Date(S.rate.ts).toLocaleString('it-IT', { dateStyle: 'medium', timeStyle: 'short' }) : 'mai aggiornato';
-  const cash = L.filter(x => x.cash && curOf(x) === 'PEN');
-  const cashTot = cash.reduce((a, x) => a + nativeAmt(S, x) * (x.scope === 'pp' ? S.persons : 1), 0);
+  const cashAll = L.filter(x => x.cash && curOf(S, x) !== 'EUR');
+  const cashSum = cu => cashAll.filter(x => curOf(S, x) === cu).reduce((a, x) => a + nativeAmt(S, x) * (x.scope === 'pp' ? S.persons : 1), 0);
+  const cashPen = cashSum('PEN'), cashUsd = cashSum('USD');
   return `<h2>Costi</h2>
   <p class="lead">Le stime partono dai tuoi importi. Quando prenoti, scrivi la cifra pagata in euro: quella resta fissa anche se il cambio si muove.</p>
   <div class="rate">
-    <span>1 € =</span> <b>${nfp.format(S.rate.pen)} S/</b>
-    <span class="small">Fonte: ${esc(S.rate.src)}. Aggiornato: ${esc(rateTs)}.</span>
+    <span>1 € =</span> <b>${nfp.format(S.rate.pen)} S/</b> <span>e</span> <b>${nfp.format(S.rate.usd)} $</b>
+    <span class="small">Aggiornato: ${esc(rateTs)}.</span>
     <button class="btn sm ghost" data-act="rateRefresh">Aggiorna dal web</button>
-    <label class="small">Imposta a mano <input class="num" type="text" inputmode="decimal" data-rate="manual" placeholder="${nfp.format(S.rate.pen)}"></label>
-    ${S.rate.manual ? '<button class="btn sm ghost" data-act="rateAuto">Torna all’automatico</button>' : ''}
-    <a class="small" href="https://www.ilsole24ore.com" target="_blank" rel="noopener">Controlla su Il Sole 24 Ore</a>
   </div>
-  <p class="small" style="margin-top:-12px">Il Sole 24 Ore non offre un servizio pubblico che un sito possa leggere da solo: il cambio automatico arriva da ExchangeRate-API (tasso di mercato). Se preferisci il valore del Sole 24 Ore, copialo qui sopra a mano e resta fisso finché non lo cambi.</p>
 
   <div class="grid2" style="margin:24px 0 8px">
     <div class="panel"><h3>Riepilogo</h3>
       <table class="mini"><tr><td>Totale stimato in ${S.persons}</td><td>${eur2(T.total)}</td></tr><tr><td>A testa</td><td>${eur2(T.perPerson)}</td></tr><tr><td>Già pagato</td><td>${eur2(T.paid)}</td></tr><tr class="tot"><td>Ancora da pagare (stima)</td><td>${eur2(T.left)}</td></tr></table></div>
-    <div class="panel"><h3>Contanti da portare in soles</h3><p class="small">Voci da pagare in loco.</p>
-      <table class="mini">${cash.map(x => `<tr><td>${esc(x.label)}</td><td>${solFmt(nativeAmt(S, x) * (x.scope === 'pp' ? S.persons : 1))}</td></tr>`).join('')}<tr class="tot"><td>Totale</td><td>${solFmt(cashTot)} ≈ ${eur0(cashTot / S.rate.pen)}</td></tr></table></div>
+    <div class="panel"><h3>Contanti da portare</h3><p class="small">Voci da pagare in loco, nella valuta indicata.</p>
+      <table class="mini">${cashAll.map(x => `<tr><td>${esc(x.label)}</td><td>${(curOf(S, x) === 'USD' ? '$ ' + nfp.format(nativeAmt(S, x) * (x.scope === 'pp' ? S.persons : 1)) : solFmt(nativeAmt(S, x) * (x.scope === 'pp' ? S.persons : 1)))}</td></tr>`).join('')}
+      ${cashPen ? `<tr class="tot"><td>Totale in soles</td><td>${solFmt(cashPen)} ≈ ${eur0(cashPen / S.rate.pen)}</td></tr>` : ''}${cashUsd ? `<tr class="tot"><td>Totale in dollari</td><td>$ ${nfp.format(cashUsd)} ≈ ${eur0(cashUsd / S.rate.usd)}</td></tr>` : ''}</table></div>
   </div>
 
   <h3 style="margin:22px 0 4px">Per categoria</h3>
@@ -434,10 +469,10 @@ function costiTab() {
   <tr class="sum"><td></td><td>Totale</td><td class="r">${eur0(T.total)}</td><td class="r">${eur0(T.perPerson)}</td></tr></table></div>
 
   <h3 style="margin:22px 0 4px">Tutte le voci</h3>
-  <p class="small">Modifica l’importo nella valuta della voce. In “Pagato” metti il totale in euro realmente pagato per quella voce, per tutte le persone.</p>
+  <p class="small">Scegli la valuta di ogni voce (euro, soles o dollari) e scrivi l’importo: cambiando valuta il numero resta uguale, correggilo se serve. In “Pagato” metti il totale in euro realmente pagato per quella voce, per tutte le persone.</p>
   <div class="tblwrap"><table class="tbl"><tr><th>Voce</th><th>Giorno</th><th class="r">Importo</th><th class="r">Stima in euro</th><th class="r">Pagato in euro</th></tr>
   ${L.map(c => { const o = S.items[c.id] || {}; return `<tr class="${isPaid(S, c) ? 'paid' : ''}"><td>${esc(c.label)}${c.est ? '<span class="esttag">stima</span>' : ''}<br><span class="small">${c.scope === 'pp' ? 'a testa' : 'in ' + S.persons}</span></td><td>${c.day ? c.day.n : '–'}</td>
-    <td class="r">${curOf(c) === 'PEN' ? 'S/' : '€'} <input class="num" type="text" inputmode="decimal" data-item="${c.id}" data-field="amt" value="${nativeAmt(S, c)}"></td>
+    <td class="r"><select data-item="${c.id}" data-field="cur" aria-label="Valuta">${['EUR', 'PEN', 'USD'].map(v => `<option value="${v}" ${curOf(S, c) === v ? 'selected' : ''}>${v === 'EUR' ? '€' : (v === 'PEN' ? 'S/' : '$')}</option>`).join('')}</select> <input class="num" type="text" inputmode="decimal" data-item="${c.id}" data-field="amt" value="${nativeAmt(S, c)}"></td>
     <td class="r">${eur2(lineEst(S, c))}</td>
     <td class="r">€ <input class="num" type="text" inputmode="decimal" data-item="${c.id}" data-field="paid" value="${o.paid != null ? o.paid : ''}" placeholder="–"></td></tr>`; }).join('')}
   </table></div>`;
@@ -541,32 +576,82 @@ function voliTab() {
 }
 
 /* ----- tab: mappa e tempi ----- */
+const resolvePt = x => typeof x === 'string' ? { n: x, ll: PLACE[x] } : x;
+const modeLabel = l => `${MODES[l.m][0]} ${MODES[l.m][1]}${l.night ? ' 🌙 di notte' : ''}`;
+function gmapsLink(l) {
+  if (l.m === 'plane' || l.m === 'boat') return '';
+  const a = resolvePt(l.a), b = resolvePt(l.b);
+  let u = `https://www.google.com/maps/dir/?api=1&origin=${a.ll.join(',')}&destination=${b.ll.join(',')}&travelmode=${l.m === 'train' ? 'transit' : (l.m === 'foot' ? 'walking' : 'driving')}`;
+  if (l.via && l.via.length) u += '&waypoints=' + l.via.map(v => PLACE[v].join(',')).join('%7C');
+  return u;
+}
 function mappaTab() {
   const { days } = CTX;
   const legs = [];
-  days.forEach(d => (d.legs || []).forEach(l => legs.push({ n: d.n, l })));
+  days.forEach(d => (d.legs || []).forEach(l => legs.push({ n: d.n, date: d.date, l })));
+  const used = [...new Set(legs.map(x => x.l.m))];
+  const legend = used.map(m => `<span style="margin-right:16px;white-space:nowrap">${MODES[m][0]} ${MODES[m][1]}</span>`).join('') + (legs.some(x => x.l.night) ? '<span style="white-space:nowrap">🌙 di notte</span>' : '');
   return `<h2>Mappa e tempi di percorrenza</h2>
-  <p class="lead">Le tappe del viaggio nell’ordine in cui le percorri. I tempi sono quelli del tuo programma e delle soste previste.</p>
+  <p class="lead">Le tappe nell’ordine in cui le percorri, con il mezzo di ogni spostamento. Le strade sono disegnate seguendo la rete stradale; per il percorso preciso apri il tragitto in Google Maps dalla tabella.</p>
+  <p style="margin:0 0 6px">${legend}</p>
   <div id="map" role="img" aria-label="Mappa delle tappe del viaggio in Perù"></div>
-  <div class="tblwrap"><table class="tbl"><tr><th>Giorno</th><th>Da</th><th>A</th><th>Come</th><th>Quanto</th></tr>
-  ${legs.map(x => `<tr><td>${x.n}</td><td>${esc(x.l[0])}</td><td>${esc(x.l[1])}</td><td>${esc(x.l[2])}</td><td>${esc(x.l[3])}</td></tr>`).join('')}</table></div>`;
+  <p class="small" id="mapnote"></p>
+  <div class="tblwrap"><table class="tbl"><tr><th>Giorno</th><th>Da</th><th>A</th><th>Come</th><th>Quanto</th><th>Strada</th></tr>
+  ${legs.map(x => { const a = resolvePt(x.l.a), b = resolvePt(x.l.b), g = gmapsLink(x.l); return `<tr><td>${x.n}</td><td>${esc(a.n)}</td><td>${esc(b.n)}</td><td>${modeLabel(x.l)}</td><td>${esc(x.l.t)}</td><td>${g ? `<a class="btn sm ghost" href="${esc(g)}" target="_blank" rel="noopener">Google Maps</a>` : '–'}</td></tr>`; }).join('')}</table></div>`;
 }
-let MAP = null;
-function initMap() {
+let MAP = null, MAPTOK = 0;
+const ROUTE_KEY = 'peru-routes-v1';
+const routeCache = () => { try { return JSON.parse(localStorage.getItem(ROUTE_KEY)) || {}; } catch (e) { return {}; } };
+async function getRoute(coords) {
+  const key = coords.map(c => c.join(',')).join(';'), cache = routeCache();
+  if (cache[key]) return cache[key];
+  const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${coords.map(c => c[1] + ',' + c[0]).join(';')}?overview=simplified&geometries=geojson`);
+  const j = await r.json();
+  if (j.code !== 'Ok') throw new Error('route');
+  const pts = j.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+  cache[key] = pts; try { localStorage.setItem(ROUTE_KEY, JSON.stringify(cache)); } catch (e) { /* ignora */ }
+  return pts;
+}
+function modeIcon(l) {
+  return L.divIcon({ className: 'mk', iconSize: [34, 34], html: `<span class="mk-in">${MODES[l.m][0]}${l.night ? '<i>🌙</i>' : ''}</span>` });
+}
+async function initMap() {
   const el = document.getElementById('map');
   if (!el) return;
   if (typeof L === 'undefined') { el.innerHTML = '<p style="padding:16px">La mappa non si è caricata: controlla la connessione e ricarica la pagina.</p>'; return; }
   if (MAP) { MAP.remove(); MAP = null; }
+  const tok = ++MAPTOK;
   MAP = L.map(el, { scrollWheelZoom: false });
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 17, attribution: '&copy; OpenStreetMap' }).addTo(MAP);
-  const path = [];
+  const bounds = [];
   CTX.days.forEach(d => {
-    if (d.ll && (!path.length || path[path.length - 1].join() !== d.ll.join())) path.push(d.ll);
-    if (d.ll && d.place) L.circleMarker(d.ll, { radius: 7, color: REGIONS[d.region].color, weight: 3, fillColor: '#fff', fillOpacity: 1 }).addTo(MAP).bindPopup(`<b>Giorno ${d.n}</b><br>${esc(d.place)}`);
-    (d.pts || []).forEach(p => L.circleMarker([p[1], p[2]], { radius: 4, color: '#B83D6A', weight: 2, fillColor: '#B83D6A', fillOpacity: .9 }).addTo(MAP).bindPopup(esc(p[0])));
+    if (d.ll && d.place) { bounds.push(d.ll); L.circleMarker(d.ll, { radius: 6, color: REGIONS[d.region].color, weight: 3, fillColor: '#fff', fillOpacity: 1 }).addTo(MAP).bindPopup(`<b>Notte del giorno ${d.n}</b><br>${esc(d.place)}`); }
   });
-  const line = L.polyline(path, { color: '#17272F', weight: 3, dashArray: '2 7' }).addTo(MAP);
-  MAP.fitBounds(line.getBounds(), { padding: [30, 30] });
+  const legs = [];
+  CTX.days.forEach(d => (d.legs || []).forEach(l => legs.push({ d, l })));
+  if (bounds.length) MAP.fitBounds(bounds, { padding: [30, 30] });
+  let fails = 0;
+  for (const { d, l } of legs) {
+    if (tok !== MAPTOK) return;
+    if (l.far) continue;
+    const a = resolvePt(l.a), b = resolvePt(l.b);
+    if (!a.ll || !b.ll || l.m === 'foot') continue;
+    let pts = [a.ll, b.ll], style, road = l.m === 'car' || l.m === 'bus';
+    if (l.m === 'plane') style = { color: '#B83D6A', weight: 2.5, dashArray: '6 8' };
+    else if (l.m === 'boat') style = { color: '#1D7390', weight: 3.5, dashArray: '1 7', lineCap: 'round' };
+    else if (l.m === 'train') style = { color: '#17272F', weight: 3, dashArray: '10 5 2 5' };
+    else style = l.m === 'bus' ? { color: '#1D7390', weight: 4, opacity: .85 } : { color: '#17272F', weight: 3, opacity: .85 };
+    if (road) {
+      try { pts = await getRoute([a.ll].concat((l.via || []).map(v => PLACE[v]), [b.ll])); }
+      catch (e) { fails++; style = { color: '#8A969C', weight: 2.5, dashArray: '2 6' }; }
+      if (tok !== MAPTOK) return;
+    }
+    L.polyline(pts, style).addTo(MAP);
+    const mid = pts[Math.floor(pts.length / 2)];
+    L.marker(mid, { icon: modeIcon(l) }).addTo(MAP).bindPopup(`<b>Giorno ${d.n}</b><br>${esc(a.n)} → ${esc(b.n)}<br>${esc(modeLabel(l))}, ${esc(l.t)}`);
+  }
+  const note = document.getElementById('mapnote');
+  if (note && fails) note.textContent = 'Non sono riuscito a caricare alcune strade: le linee grigie puntinate sono tratti dritti. Riprova più tardi o usa i link a Google Maps.';
 }
 
 /* ----- tab: siti ufficiali ----- */
@@ -588,10 +673,24 @@ function sitiTab() {
 }
 
 function footer() {
-  return `<footer class="foot"><div class="wrap">${syncPanel()}<p>Le modifiche si salvano da sole in questo browser. Per portarle su un altro dispositivo o condividerle con il tuo ragazzo, esporta il file e importalo dall’altra parte.</p>
-  <div class="inl"><button class="btn ghost sm" data-act="export">Esporta le modifiche</button><button class="btn ghost sm" data-act="import">Importa un file</button><button class="btn ghost sm" data-act="reset">Ricomincia da zero</button><input type="file" id="file" accept="application/json" hidden></div>
-  <p style="margin-top:14px">Cambio da <a href="https://www.exchangerate-api.com" target="_blank" rel="noopener">ExchangeRate-API</a>. Mappa © OpenStreetMap.</p></div></footer>`;
+  return `<footer class="foot"><div class="wrap"><button class="linkbtn" data-act="settings">Impostazioni</button>
+  <p style="margin:12px 0 0">Cambio da <a href="https://www.exchangerate-api.com" target="_blank" rel="noopener">ExchangeRate-API</a>. Mappa © OpenStreetMap.</p></div></footer>`;
 }
+function settingsHTML() {
+  const linked = !!(S.sync && S.sync.code);
+  return `<h3 style="margin-bottom:10px">Impostazioni</h3>
+    <p class="small">${linked ? 'Le modifiche si salvano da sole e compaiono su tutti i dispositivi collegati.' : 'Le modifiche si salvano da sole, ma solo su questo dispositivo. Per vederle anche su un altro, collegalo con un codice.'}</p>
+    ${syncPanel()}
+    <h4 style="margin:18px 0 6px">Copia di sicurezza</h4>
+    <div class="inl"><button class="btn ghost sm" data-act="export">Esporta in un file</button><button class="btn ghost sm" data-act="import">Importa da un file</button><button class="btn ghost sm" data-act="reset">Ricomincia da zero</button><input type="file" id="file" accept="application/json" hidden></div>
+    <form method="dialog" style="margin-top:18px;text-align:right"><button class="btn">Chiudi</button></form>`;
+}
+function openSettings() {
+  const dlg = document.getElementById('dlg');
+  dlg.innerHTML = settingsHTML();
+  if (!dlg.open) dlg.showModal();
+}
+function refreshSettings() { const dlg = document.getElementById('dlg'); if (dlg.open && document.getElementById('syncstat')) dlg.innerHTML = settingsHTML(); }
 
 /* ---------- dialog: esperienza personalizzata ---------- */
 function openCustomDialog() {
@@ -604,7 +703,7 @@ function openCustomDialog() {
     <label>Dopo quale momento<select name="after" id="cafter"></select></label>
     <label>Orario (facoltativo)<input type="time" name="t"></label>
     <div class="inl"><label>Costo<input type="text" inputmode="decimal" name="amt" style="width:100px"></label>
-      <label>Valuta<select name="cur"><option value="EUR">Euro</option><option value="PEN">Soles</option></select></label>
+      <label>Valuta<select name="cur"><option value="EUR">Euro</option><option value="PEN">Soles</option><option value="USD">Dollari</option></select></label>
       <label>Per<select name="scope"><option value="pp">a testa</option><option value="sh">in due</option></select></label></div>
     <label style="flex-direction:row;gap:8px;align-items:center"><input type="checkbox" name="book" style="width:auto"> Si può prenotare in anticipo</label>
     <label>Sito dove prenotare (facoltativo)<input type="text" name="url" placeholder="https://…"></label>
@@ -626,9 +725,9 @@ async function fetchRate(silent) {
   try {
     const r = await fetch('https://open.er-api.com/v6/latest/EUR');
     const j = await r.json();
-    if (j.result === 'success' && j.rates && j.rates.PEN) {
-      S.rate.pen = +j.rates.PEN.toFixed(4); S.rate.src = 'ExchangeRate-API (tasso di mercato)';
-      S.rate.ts = j.time_last_update_utc ? new Date(j.time_last_update_utc).toISOString() : new Date().toISOString(); S.rate.manual = false;
+    if (j.result === 'success' && j.rates && j.rates.PEN && j.rates.USD) {
+      S.rate.pen = +j.rates.PEN.toFixed(4); S.rate.usd = +j.rates.USD.toFixed(4); S.rate.src = 'ExchangeRate-API (tasso di mercato)';
+      S.rate.ts = j.time_last_update_utc ? new Date(j.time_last_update_utc).toISOString() : new Date().toISOString();
       save(); render(); if (!silent) toast('Cambio aggiornato');
       return;
     }
@@ -647,6 +746,7 @@ document.addEventListener('click', ev => {
   if (!el) return;
   const act = el.dataset.act, id = el.dataset.id;
   if (act === 'tab') { S.ui.tab = el.dataset.tab; save(); render(); window.scrollTo(0, 0); }
+  else if (act === 'prof') { S.ui.prof = el.dataset.v; save(); render(); }
   else if (act === 'toggleDay') { S.ui.open[id] = !S.ui.open[id]; save(); render(); }
   else if (act === 'openall') { CTX.days.forEach(d => { S.ui.open[d.id] = true; }); save(); render(); }
   else if (act === 'closeall') { S.ui.open = {}; save(); render(); }
@@ -656,17 +756,17 @@ document.addEventListener('click', ev => {
   else if (act === 'newCustom') openCustomDialog();
   else if (act === 'delCustom') { S.custom = S.custom.filter(c => c.id !== id); save(); render(); }
   else if (act === 'rateRefresh') fetchRate(false);
-  else if (act === 'rateAuto') { S.rate.manual = false; save(); fetchRate(false); }
   else if (act === 'useFare') { S.fare.use[el.dataset.kind] = id; syncFare(); save(); render(); }
   else if (act === 'addAirline') { const k = el.dataset.kind, n = document.getElementById(`al-${k}-n`).value.trim(), u = document.getElementById(`al-${k}-u`).value.trim(); if (n) { S.fare.extra[k].push({ id: 'x' + Date.now(), name: n, url: u || '#', custom: true }); save(); render(); } }
   else if (act === 'delAirline') { const k = el.dataset.kind; S.fare.extra[k] = S.fare.extra[k].filter(a => a.id !== id); save(); render(); }
+  else if (act === 'settings') openSettings();
   else if (act === 'syncNew') connect(newCode());
   else if (act === 'syncJoin') connect(document.getElementById('synccode').value);
   else if (act === 'syncCopy') {
     const link = location.origin + location.pathname + '#v=' + S.sync.code;
     (navigator.clipboard ? navigator.clipboard.writeText(link) : Promise.reject()).then(() => toast('Link copiato'), () => prompt('Copia questo link:', link));
   }
-  else if (act === 'syncOff') { if (confirm('Scollegare questo dispositivo? Le modifiche già salvate online restano al sicuro.')) { delete S.sync; save(); render(); } }
+  else if (act === 'syncOff') { if (confirm('Scollegare questo dispositivo? Le modifiche già salvate online restano al sicuro.')) { delete S.sync; save(); render(); refreshSettings(); } }
   else if (act === 'export') {
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' }));
     a.download = 'viaggio-peru.json'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
@@ -692,6 +792,7 @@ document.addEventListener('change', ev => {
     const id = el.dataset.item, f = el.dataset.field;
     S.items[id] = S.items[id] || {};
     if (f === 'amt' || f === 'paid') { const n = num(el.value); if (n == null) delete S.items[id][f]; else S.items[id][f] = n; }
+    else if (f === 'cur') S.items[id].cur = el.value;
     else if (el.value === '') delete S.items[id][f]; else S.items[id][f] = el.value;
     save(); render();
   } else if (el.dataset.note) { S.notes[el.dataset.note] = el.value; save(); }
@@ -699,9 +800,6 @@ document.addEventListener('change', ev => {
     const n = num(el.value);
     if (n == null) delete S.fare.p[el.dataset.fare]; else S.fare.p[el.dataset.fare] = { v: n, ts: new Date().toISOString() };
     syncFare(); save(); render();
-  } else if (el.dataset.rate) {
-    const n = num(el.value);
-    if (n && n > 0) { S.rate.pen = n; S.rate.manual = true; S.rate.src = 'inserito a mano'; S.rate.ts = new Date().toISOString(); save(); render(); }
   }
 });
 document.addEventListener('keydown', ev => {
@@ -769,7 +867,7 @@ async function connect(code) {
     if (res) { adopt(res.data, res.version); toast('Collegato: ho caricato il viaggio condiviso'); }
     else { await push(); toast('Collegato: il viaggio è ora salvato online'); }
   } catch (e) { S.sync.status = 'offline'; toast('Non riesco a collegarmi: controlla la connessione'); }
-  save(); render();
+  save(); render(); refreshSettings();
 }
 const newCode = () => { const a = 'abcdefghjkmnpqrstuvwxyz23456789', r = new Uint8Array(24); crypto.getRandomValues(r); return [...r].map(x => a[x % a.length]).join(''); };
 function syncPanel() {
@@ -792,5 +890,5 @@ render();
 })();
 (function () {
   const old = !S.rate.ts || (Date.now() - new Date(S.rate.ts).getTime()) > 6 * 3600 * 1000;
-  if (!S.rate.manual && old) fetchRate(true);
+  if (old) fetchRate(true);
 })();
