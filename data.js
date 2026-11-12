@@ -21,11 +21,11 @@ const REGIONS = {
 };
 
 const AIRPORTS = {
-  TRN: { code: 'TRN', name: 'Torino Caselle',        home: 'Aosta',          drive: 80,  est: true },
-  LIN: { code: 'LIN', name: 'Milano Linate',         home: 'Aosta',          drive: 120, est: false },
-  MXP: { code: 'MXP', name: 'Milano Malpensa',       home: 'Aosta',          drive: 110, est: true },
-  BGY: { code: 'BGY', name: 'Bergamo Orio al Serio', home: 'Aosta',          drive: 140, est: true },
-  PSA: { code: 'PSA', name: 'Pisa Galilei',          home: 'Vecchiano (PI)', drive: 20,  est: true }
+  TRN: { code: 'TRN', name: 'Torino Caselle',        home: 'Aosta',          lat: 45.2008, lng: 7.6496, drive: 80,  est: true },
+  LIN: { code: 'LIN', name: 'Milano Linate',         home: 'Aosta',          lat: 45.4451, lng: 9.2767, drive: 120, est: false },
+  MXP: { code: 'MXP', name: 'Milano Malpensa',       home: 'Aosta',          lat: 45.6306, lng: 8.7281, drive: 110, est: true },
+  BGY: { code: 'BGY', name: 'Bergamo Orio al Serio', home: 'Aosta',          lat: 45.6739, lng: 9.7042, drive: 140, est: true },
+  PSA: { code: 'PSA', name: 'Pisa Galilei',          home: 'Vecchiano (PI)', lat: 43.6839, lng: 10.3927, drive: 20,  est: true }
 };
 
 const SITES = {
@@ -49,6 +49,24 @@ const AIRLINES_DOM = [
   { id: 'sky',    name: 'Sky Airline',  url: 'https://www.skyairline.com' },
   { id: 'jet',    name: 'JetSMART',     url: 'https://jetsmart.com' }
 ];
+
+
+/* ---- Luoghi (coordinate approssimative, per la mappa) e tragitti ---- */
+const PLACE = {
+  'Aeroporto di Lima (LIM)': [-12.0219, -77.1143], 'Hotel a Lima': [-12.1219, -77.0297], 'Terminal Cruz del Sur': [-12.0885, -77.0160],
+  'Lima': [-12.0464, -77.0428], 'Paracas': [-13.8333, -76.25], 'Isole Ballestas': [-13.7333, -76.4], 'Ica': [-14.0678, -75.7286],
+  'Huacachina': [-14.0875, -75.7633], 'Arequipa': [-16.409, -71.5375], 'Mirador de los Andes': [-15.8039, -71.4272],
+  'Chivay': [-15.6372, -71.6019], 'Cruz del Cóndor': [-15.6097, -71.8864], 'Puno': [-15.8402, -70.0219],
+  'Isole Uros': [-15.8228, -69.9689], 'Taquile': [-15.7667, -69.6833], 'Amantaní': [-15.6667, -69.7],
+  'Pucará': [-15.0357, -70.3689], 'Abra La Raya': [-14.48, -70.97], 'Sicuani': [-14.2667, -71.2333], 'Raqchi': [-14.4667, -71.4667],
+  'Andahuaylillas': [-13.6833, -71.6667], 'Cusco': [-13.5319, -71.9675], 'Aeroporto di Cusco (CUZ)': [-13.5357, -71.9388],
+  'Pisac': [-13.4208, -71.8486], 'Moray': [-13.3292, -72.1953], 'Saline di Maras': [-13.3125, -72.1561],
+  'Ollantaytambo': [-13.2583, -72.2639], 'Aguas Calientes': [-13.1547, -72.5258], 'Machu Picchu': [-13.1631, -72.545],
+  'Quesiuno (inizio trekking)': [-13.885, -71.31], 'Vinicunca': [-13.8697, -71.3033]
+};
+// m: plane | car | bus | train | boat | foot. night: tragitto di notte. via: tappe intermedie lungo la strada. far: non disegnare (volo intercontinentale)
+const leg = (a, b, m, t, o = {}) => ({ a, b, m, t, ...o });
+const MODES = { plane: ['✈️', 'Aereo'], car: ['🚗', 'Auto o taxi'], bus: ['🚌', 'Bus'], train: ['🚆', 'Treno'], boat: ['⛵', 'Barca'], foot: ['🥾', 'A piedi'] };
 
 /* ---- Voci di costo generali (non legate a un giorno) ---- */
 function GENERAL(D) {
@@ -89,13 +107,14 @@ const BLOCKS = [
       }
       return {
         title: same ? 'Partenza e arrivo a Lima' : 'Partenza dall’Italia',
-        short: 'Volo', place: same ? 'Lima' : 'In volo', alt: same ? 0 : null, ll: [-12.0464, -77.0428],
+        short: 'Volo', place: same ? 'Lima' : 'In volo', alt: same ? 150 : null, ll: [-12.0464, -77.0428],
         desc: [
           `Si parte da ${ap.home} verso ${ap.name}. ${same ? 'Il volo atterra a Lima in serata, quindi la prima notte è a Lima.' : 'Il volo è di notte: si arriva a Lima la mattina dopo.'} Lima è 7 ore indietro rispetto all’Italia con l’ora legale (6 con l’ora solare).`,
           'Consiglio: tieni nel bagaglio a mano documenti, una giacca e una scorta di contanti in euro per il primo cambio.'
         ],
         items, costs,
-        legs: [[ap.code, 'Lima', 'Volo', f.layover ? `con scalo a ${f.layover}` : 'diretto']]
+        legs: [leg({ n: `${ap.name} (${ap.code})`, ll: [ap.lat, ap.lng] }, 'Aeroporto di Lima (LIM)', 'plane', f.layover ? `con scalo a ${f.layover}` : 'diretto', { far: true })].concat(same ? [leg('Aeroporto di Lima (LIM)', 'Hotel a Lima', 'car', '45 min / 1 h 15')] : []),
+        stops: same ? [['Lima', 150]] : []
       };
     } },
 
@@ -104,7 +123,7 @@ const BLOCKS = [
     make: D => {
       const f = D.f, land = D.land;
       return {
-        title: 'Arrivo a Lima e notte in città', short: 'Lima', place: 'Lima', alt: 0, ll: [-12.1219, -77.0297],
+        title: 'Arrivo a Lima e notte in città', short: 'Lima', place: 'Lima', alt: 150, ll: [-12.1219, -77.0297],
         desc: [
           'Atterrando troppo tardi per prendere con calma l’ultimo bus per Paracas, la scelta più serena è dormire a Lima e ripartire il mattino dopo senza fretta.',
           'Zona consigliata: Miraflores o Barranco, vicine al mare, con ristoranti e molto più tranquille del centro storico.'
@@ -122,7 +141,8 @@ const BLOCKS = [
           { id: 'taxi_lim', label: 'Taxi aeroporto → hotel a Lima', pen: 100, scope: 'sh', cat: 'Trasporti' },
           { id: 'hotel_lima', label: 'Hotel Lima, 1 notte', eur: 90, scope: 'sh', cat: 'Alloggi', book: { site: 'Booking / sito hotel', url: '', rec: 0, open: 'Prenota con cancellazione gratuita appena le date sono fissate.' } }
         ],
-        legs: [['Aeroporto LIM', 'Hotel a Lima', 'Taxi', '45 min / 1 h 15']]
+        legs: [leg('Aeroporto di Lima (LIM)', 'Hotel a Lima', 'car', '45 min / 1 h 15')],
+        stops: [['Lima', 150]]
       };
     } },
 
@@ -152,7 +172,8 @@ const BLOCKS = [
             book: { site: SITES.cruz.name, url: SITES.cruz.url, rec: 30, open: 'Verifica sul sito la finestra di vendita online della tratta.' } },
           { id: 'hotel_paracas', label: 'Hotel Paracas, 1 notte', eur: 80, scope: 'sh', cat: 'Alloggi', book: { site: 'Booking / sito hotel', url: '', rec: 0, open: 'Prenota con cancellazione gratuita appena le date sono fissate.' } }
         ],
-        legs: [['Lima', 'Paracas', 'Bus Cruz del Sur', '3 h 30']]
+        legs: [leg('Hotel a Lima', 'Terminal Cruz del Sur', 'car', '20 / 40 min'), leg('Terminal Cruz del Sur', 'Paracas', 'bus', '3 h 30')],
+        stops: [['Lima', 150], ['Paracas', 5]]
       };
     } },
 
@@ -183,7 +204,8 @@ const BLOCKS = [
             book: { site: SITES.cruz.name, url: SITES.cruz.url, rec: 30, open: 'Verifica sul sito la finestra di vendita online della tratta.' } },
           { id: 'hotel_paracas', label: 'Hotel Paracas, 1 notte', eur: 80, scope: 'sh', cat: 'Alloggi', book: { site: 'Booking / sito hotel', url: '', rec: 0, open: 'Prenota con cancellazione gratuita appena le date sono fissate.' } }
         ],
-        legs: [['Aeroporto LIM', 'Terminal Javier Prado', 'Taxi', `${D.c.taxi} min`], ['Lima', 'Paracas', 'Bus Cruz del Sur', '3 h 30']]
+        legs: [leg('Aeroporto di Lima (LIM)', 'Terminal Cruz del Sur', 'car', `${D.c.taxi} min`), leg('Terminal Cruz del Sur', 'Paracas', 'bus', '3 h 30')],
+        stops: [['Lima', 150], ['Paracas', 5]]
       };
     } },
 
@@ -217,12 +239,16 @@ const BLOCKS = [
         { id: 'bus_ia', label: 'Bus notturno 1ª classe Ica → Arequipa', pen: 185, scope: 'pp', cat: 'Trasporti', note: 'circa 12 ore',
           book: { site: SITES.cruz.name, url: SITES.cruz.url, rec: 30, open: 'Verifica sul sito la finestra di vendita online della tratta.' } }
       ],
-      legs: [['Paracas', 'Isole Ballestas', 'Barca', '2 ore (andata e ritorno)'], ['Paracas', 'Ica', 'Bus Cruz del Sur', '1 h 10'], ['Ica', 'Arequipa', 'Bus notturno', 'circa 11 h 40']]
+      legs: [leg('Paracas', 'Isole Ballestas', 'boat', '2 ore (andata e ritorno)'), leg('Paracas', 'Ica', 'bus', '1 h 10')]
+        .concat(D.ex.huaca_A || D.ex.huaca_B ? [leg('Ica', 'Huacachina', 'car', '15 min (andata e ritorno)')] : [])
+        .concat([leg('Ica', 'Arequipa', 'bus', 'circa 11 h 40', { night: true })]),
+      stops: [['Paracas', 5], ['Isole Ballestas', 0], ['Paracas', 5], ['Ica', 406]].concat(D.ex.huaca_A || D.ex.huaca_B ? [['Huacachina', 410], ['Ica', 406]] : [])
     }) },
 
   { id: 'arequipa', region: 'sud',
     make: D => ({
       title: 'Arequipa e il Monastero di Santa Catalina', short: 'Arequipa', place: 'Arequipa', alt: 2335, ll: [-16.409, -71.5375],
+      stops: [['Arequipa', 2335]],
       desc: [
         'Si arriva in mattinata con il bus notturno. Arequipa, la “Città Bianca”, ha un centro storico UNESCO costruito in pietra vulcanica chiara e dominato dal vulcano Misti.',
         'Il Monastero di Santa Catalina, fondato nel 1579, è una piccola città dentro la città, con vicoli, patii e celle colorate. Dopo la notte in bus la giornata è tranquilla: serata presto a letto perché l’indomani si parte all’alba.'
@@ -267,7 +293,8 @@ const BLOCKS = [
           book: { site: 'Boleto turistico del Colca (sito ufficiale)', url: '', rec: 0, open: 'Di solito si paga all’ingresso della valle: incolla qui il link ufficiale quando lo hai.' } },
         { id: 'hotel_chivay', label: 'Hotel Chivay, 1 notte', eur: 50, scope: 'sh', cat: 'Alloggi', book: { site: 'Booking / sito hotel', url: '', rec: 0, open: 'Prenota con cancellazione gratuita appena le date sono fissate.' } }
       ],
-      legs: [['Arequipa', 'Chivay', 'Auto privata con guida', 'circa 6 h 30 con soste']]
+      legs: [leg('Arequipa', 'Chivay', 'car', 'circa 6 h 30 con soste', { via: ['Mirador de los Andes'] })],
+      stops: [['Arequipa', 2335], ['Mirador de los Andes', 4910], ['Chivay', 3633]]
     }) },
 
   { id: 'colca_puno', region: 'sud',
@@ -295,7 +322,8 @@ const BLOCKS = [
           book: { site: 'Agenzia / autista privato', url: '', rec: 60, open: 'Da concordare con l’operatore: chiedi preventivo con largo anticipo.' } },
         { id: 'hotel_puno_1', label: 'Hotel Puno, 1 notte', eur: 80, scope: 'sh', cat: 'Alloggi', book: { site: 'Booking / sito hotel', url: '', rec: 0, open: 'Prenota con cancellazione gratuita appena le date sono fissate.' } }
       ],
-      legs: [['Chivay', 'Cruz del Cóndor', 'Auto privata', 'circa 1 h 30'], ['Chivay', 'Puno', 'Auto privata con soste', 'circa 7 ore']]
+      legs: [leg('Chivay', 'Cruz del Cóndor', 'car', 'circa 1 h 30 (andata e ritorno)'), leg('Chivay', 'Puno', 'car', 'circa 7 ore con soste')],
+      stops: [['Chivay', 3633], ['Cruz del Cóndor', 3700], ['Chivay', 3633], ['Puno', 3830]]
     }) },
 
   { id: 'titicaca_giorno', region: 'titicaca',
@@ -321,7 +349,8 @@ const BLOCKS = [
           book: { site: 'GetYourGuide / agenzia locale', url: '', rec: 30, open: 'Prenotabile online con cancellazione gratuita.' } },
         { id: 'hotel_puno_2', label: 'Hotel Puno, 1 notte', eur: 80, scope: 'sh', cat: 'Alloggi', book: { site: 'Booking / sito hotel', url: '', rec: 0, open: 'Prenota con cancellazione gratuita appena le date sono fissate.' } }
       ],
-      legs: [['Puno', 'Uros e Taquile', 'Barca', 'giornata intera']]
+      legs: [leg('Puno', 'Isole Uros', 'boat', 'circa 1 h'), leg('Isole Uros', 'Taquile', 'boat', 'circa 2 h'), leg('Taquile', 'Puno', 'boat', 'circa 3 h')],
+      stops: [['Puno', 3830], ['Isole Uros', 3810], ['Taquile', 3950], ['Puno', 3830]]
     }) },
 
   { id: 'amantani_1', region: 'titicaca',
@@ -348,7 +377,8 @@ const BLOCKS = [
         { id: 'tour_titicaca_2d', label: 'Tour di 2 giorni sul Titicaca con notte ad Amantaní (GetYourGuide)', eur: 60, scope: 'pp', cat: 'Attività',
           book: { site: 'GetYourGuide', url: 'https://www.getyourguide.it', rec: 30, open: 'Prenotabile online con cancellazione gratuita.' } }
       ],
-      legs: [['Puno', 'Amantaní', 'Barca (via Uros)', 'circa 4 ore']]
+      legs: [leg('Puno', 'Isole Uros', 'boat', 'circa 1 h'), leg('Isole Uros', 'Amantaní', 'boat', 'circa 3 h')],
+      stops: [['Puno', 3830], ['Isole Uros', 3810], ['Amantaní', 4000]]
     }) },
 
   { id: 'amantani_2', region: 'titicaca',
@@ -373,7 +403,8 @@ const BLOCKS = [
       costs: [
         { id: 'hotel_puno_2', label: 'Hotel Puno, 1 notte', eur: 80, scope: 'sh', cat: 'Alloggi', book: { site: 'Booking / sito hotel', url: '', rec: 0, open: 'Prenota con cancellazione gratuita appena le date sono fissate.' } }
       ],
-      legs: [['Amantaní', 'Taquile', 'Barca', 'circa 1 h 30'], ['Taquile', 'Puno', 'Barca', 'circa 3 ore']]
+      legs: [leg('Amantaní', 'Taquile', 'boat', 'circa 1 h 30'), leg('Taquile', 'Puno', 'boat', 'circa 3 h')],
+      stops: [['Amantaní', 4000], ['Taquile', 3950], ['Puno', 3830]]
     }) },
 
   { id: 'ruta_sol', region: 'titicaca',
@@ -411,7 +442,8 @@ const BLOCKS = [
         { id: 'ruta_ingressi', label: 'Biglietti d’ingresso alle fermate della Ruta del Sol', pen: 53, scope: 'pp', cat: 'Ingressi', cash: true },
         { id: 'hotel_cusco_1', label: 'Hotel Cusco, 1 notte', eur: 50, scope: 'sh', cat: 'Alloggi', book: { site: 'Booking / sito hotel', url: '', rec: 0, open: 'Prenota con cancellazione gratuita appena le date sono fissate.' } }
       ],
-      legs: [['Puno', 'Cusco', 'Bus turistico Ruta del Sol', '11 h 20 con soste']]
+      legs: [leg('Puno', 'Cusco', 'bus', '11 h 20 con soste', { via: ['Pucará', 'Abra La Raya', 'Sicuani', 'Raqchi', 'Andahuaylillas'] })],
+      stops: [['Puno', 3830], ['Pucará', 3900], ['Abra La Raya', 4338], ['Sicuani', 3550], ['Raqchi', 3500], ['Andahuaylillas', 3100], ['Cusco', 3399]]
     }) },
 
   { id: 'valle_sacra', region: 'cusco',
@@ -450,7 +482,8 @@ const BLOCKS = [
           book: { site: SITES.rail.name, url: SITES.rail.url, rec: 90, open: 'PeruRail consiglia di acquistare almeno 3 mesi prima in alta stagione. Vendita online tutto l’anno.' } },
         { id: 'hotel_ac', label: 'Hotel Aguas Calientes, 1 notte', eur: 50, scope: 'sh', cat: 'Alloggi', book: { site: 'Booking / sito hotel', url: '', rec: 0, open: 'Prenota con cancellazione gratuita appena le date sono fissate.' } }
       ],
-      legs: [['Cusco', 'Pisac', 'Auto privata', 'circa 1 h 30'], ['Moray', 'Maras', 'Auto privata', '30 min'], ['Ollantaytambo', 'Aguas Calientes', 'Treno PeruRail', '1 h 41']]
+      legs: [leg('Cusco', 'Pisac', 'car', 'circa 1 h 30'), leg('Pisac', 'Moray', 'car', 'circa 2 h'), leg('Moray', 'Saline di Maras', 'car', '30 min'), leg('Saline di Maras', 'Ollantaytambo', 'car', 'circa 1 h 30'), leg('Ollantaytambo', 'Aguas Calientes', 'train', '1 h 41')],
+      stops: [['Cusco', 3399], ['Pisac', 2972], ['Moray', 3500], ['Saline di Maras', 3380], ['Ollantaytambo', 2792], ['Aguas Calientes', 2040]]
     }) },
 
   { id: 'machu_picchu', region: 'cusco',
@@ -488,12 +521,16 @@ const BLOCKS = [
           book: { site: SITES.rail.name, url: SITES.rail.url, rec: 90, open: 'PeruRail consiglia di acquistare almeno 3 mesi prima in alta stagione. Vendita online tutto l’anno.' } },
         { id: 'hotel_cusco_2', label: 'Hotel Cusco, 1 notte', eur: 50, scope: 'sh', cat: 'Alloggi', book: { site: 'Booking / sito hotel', url: '', rec: 0, open: 'Prenota con cancellazione gratuita appena le date sono fissate.' } }
       ],
-      legs: [['Aguas Calientes', 'Machu Picchu', 'Navetta', '30 min'], ['Aguas Calientes', 'Ollantaytambo', 'Treno PeruRail', '1 h 58'], ['Ollantaytambo', 'Cusco', 'Bus', 'circa 2 h 10']]
+      legs: [leg('Aguas Calientes', 'Machu Picchu', 'bus', '30 min (navetta)')]
+        .concat(D.ex.ac_stay ? [] : [leg('Aguas Calientes', 'Ollantaytambo', 'train', '1 h 58'), leg('Ollantaytambo', 'Cusco', 'bus', 'circa 2 h 10')]),
+      stops: [['Aguas Calientes', 2040], ['Machu Picchu', 2430], ['Aguas Calientes', 2040]].concat(D.ex.ac_stay ? [] : [['Ollantaytambo', 2792], ['Cusco', 3399]])
     }) },
 
   { id: 'cusco_libero', region: 'cusco',
     make: D => ({
       title: 'Giornata libera a Cusco', short: 'Cusco', place: 'Cusco', alt: 3399, ll: [-13.5319, -71.9675],
+      legs: D.ex.ac_stay ? [leg('Aguas Calientes', 'Ollantaytambo', 'train', '1 h 58'), leg('Ollantaytambo', 'Cusco', 'bus', 'circa 2 h 10')] : [],
+      stops: D.ex.ac_stay ? [['Aguas Calientes', 2040], ['Ollantaytambo', 2792], ['Cusco', 3399]] : [['Cusco', 3399]],
       desc: [
         'Giornata intera per esplorare Cusco senza orari, riposando in vista dell’escursione ad alta quota del giorno dopo.',
         'Da non perdere: Plaza de Armas e la cattedrale, il Qorikancha, il quartiere di San Blas, il mercato di San Pedro e, con il Boleto turistico, Sacsayhuamán e gli altri siti vicini.'
@@ -534,10 +571,11 @@ const BLOCKS = [
       costs: [
         { id: 'transfer_vini', label: 'Auto con autista e guida: Vinicunca (stima)', eur: 150, scope: 'sh', cat: 'Trasporti', est: true,
           book: { site: 'Agenzia / autista privato', url: '', rec: 60, open: 'Da concordare con l’operatore: chiedi preventivo con largo anticipo.' } },
-        { id: 'vini_ingressi', label: 'Ingressi Vinicunca e Valle Rossa (stima)', pen: 30, scope: 'pp', cat: 'Ingressi', est: true, cash: true },
+        { id: 'vini_ingressi', label: 'Ingressi Vinicunca e Valle Rossa (stima)', pen: 50, scope: 'pp', cat: 'Ingressi', est: true, cash: true },
         { id: 'hotel_cusco_4', label: 'Hotel Cusco, 1 notte', eur: 50, scope: 'sh', cat: 'Alloggi', book: { site: 'Booking / sito hotel', url: '', rec: 0, open: 'Prenota con cancellazione gratuita appena le date sono fissate.' } }
       ],
-      legs: [['Cusco', 'Cusipata', 'Auto privata', 'circa 3 h 30'], ['Cusipata', 'Vinicunca', 'Trekking', 'circa 1 h 45']]
+      legs: [leg('Cusco', 'Quesiuno (inizio trekking)', 'car', 'circa 3 h 30'), leg('Quesiuno (inizio trekking)', 'Vinicunca', 'foot', 'circa 1 h 45')],
+      stops: [['Cusco', 3399], ['Quesiuno (inizio trekking)', 4326], ['Vinicunca', 5036], ['Valle Rossa', 4800], ['Quesiuno (inizio trekking)', 4326], ['Cusco', 3399]]
     }) },
 
   { id: 'cusco_lima', region: 'lima',
@@ -545,7 +583,7 @@ const BLOCKS = [
     make: D => {
       const f = D.f;
       return {
-        title: 'Volo Cusco → Lima e giornata a Lima', short: 'Lima', place: 'Lima', alt: 0, ll: [-12.1219, -77.0297],
+        title: 'Volo Cusco → Lima e giornata a Lima', short: 'Lima', place: 'Lima', alt: 150, ll: [-12.1219, -77.0297],
         desc: [
           'Volo di mattina da Cusco a Lima e resto della giornata libero per girare la città, che finora si è solo sfiorata: Miraflores, Barranco, il centro storico.',
           'Si dorme a Lima e il giorno dopo c’è con calma il volo di rientro in Italia.'
@@ -563,7 +601,8 @@ const BLOCKS = [
             book: { site: 'Sito della compagnia aerea', url: '', rec: 120, open: 'Controlla sul sito della compagnia da quando sono aperte le vendite.' } },
           { id: 'hotel_lima', label: 'Hotel Lima, 1 notte', eur: 90, scope: 'sh', cat: 'Alloggi', book: { site: 'Booking / sito hotel', url: '', rec: 0, open: 'Prenota con cancellazione gratuita appena le date sono fissate.' } }
         ],
-        legs: [['Cusco', 'Lima', 'Volo', 'circa 1 h 30']]
+        legs: [leg('Aeroporto di Cusco (CUZ)', 'Aeroporto di Lima (LIM)', 'plane', 'circa 1 h 30')],
+        stops: [['Cusco', 3399], ['Lima', 150]]
       };
     } },
 
@@ -582,7 +621,8 @@ const BLOCKS = [
           it('arr', f.intlArr, `Arrivo in Italia${f.intlOff ? ' (giorno dopo)' : ''}`, 'move')
         ],
         costs: [],
-        legs: [['Lima', 'Italia', 'Volo', 'circa 13 h con scalo']]
+        legs: [leg('Aeroporto di Lima (LIM)', { n: `${D.ap.name} (${D.ap.code})`, ll: [D.ap.lat, D.ap.lng] }, 'plane', 'circa 13 h con scalo', { far: true })],
+        stops: [['Lima', 150]]
       };
     } },
 
@@ -608,7 +648,8 @@ const BLOCKS = [
           { id: 'volo_cl', label: 'Volo Cusco → Lima (bagaglio in stiva e a mano)', eur: 110, scope: 'pp', cat: 'Voli',
             book: { site: 'Sito della compagnia aerea', url: '', rec: 120, open: 'Controlla sul sito della compagnia da quando sono aperte le vendite.' } }
         ],
-        legs: [['Cusco', 'Lima', 'Volo', 'circa 1 h 30'], ['Lima', 'Italia', 'Volo', 'circa 13 h con scalo']]
+        legs: [leg('Aeroporto di Cusco (CUZ)', 'Aeroporto di Lima (LIM)', 'plane', 'circa 1 h 30'), leg('Aeroporto di Lima (LIM)', { n: `${D.ap.name} (${D.ap.code})`, ll: [D.ap.lat, D.ap.lng] }, 'plane', 'circa 13 h con scalo', { far: true })],
+        stops: [['Cusco', 3399], ['Lima', 150]]
       };
     } }
 ];
