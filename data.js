@@ -23,9 +23,9 @@ const REGIONS = {
 // Origini di partenza. Per Pisa si parte sempre da Vecchiano.
 const ORIGINS = {
   Aosta:  { name: 'Aosta' },
-  Torino: { name: 'Torino (Via Timavo 6)' }
+  Torino: { name: 'Torino' }
 };
-// Minuti in auto dall'origine all'aeroporto. Valori approssimativi da controllare con Google Maps:
+// Minuti in auto dalla città di partenza all'aeroporto. Valori approssimativi da controllare con Google Maps:
 // si cambiano solo qui, non dal sito.
 const AIRPORTS = {
   TRN: { code: 'TRN', name: 'Torino Caselle',        lat: 45.2008, lng: 7.6496, from: { Aosta: 80,  Torino: 25 } },
@@ -73,6 +73,7 @@ const PLACE = {
 };
 // m: plane | car | bus | train | boat | foot. night: tragitto di notte. via: tappe intermedie lungo la strada. far: non disegnare (volo intercontinentale)
 const leg = (a, b, m, t, o = {}) => ({ a, b, m, t, ...o });
+const homeAp = D => D.ap ? { n: `${D.ap.name} (${D.ap.code})`, ll: [D.ap.lat, D.ap.lng] } : { n: 'Italia', ll: [45.46, 9.19] };
 const MODES = { plane: 'Aereo', car: 'Auto o taxi', bus: 'Bus', train: 'Treno', boat: 'Barca', foot: 'A piedi' };
 
 /* ---- Voci di costo generali (non legate a un giorno) ---- */
@@ -96,6 +97,13 @@ const BLOCKS = [
 
   { id: 'partenza', region: 'viaggio',
     make: D => {
+      if (!D.ap) return {
+        title: 'Partenza dall’Italia', short: 'Volo', place: 'In volo', alt: null, ll: [-12.0464, -77.0428],
+        desc: ['Il volo intercontinentale non è ancora scelto: nella sezione Voli confronti gli aeroporti e, quando scegli, qui compaiono aeroporto, orari e scalo.',
+               'Lima è 7 ore indietro rispetto all’Italia con l’ora legale (6 con l’ora solare).'],
+        items: [it('fly', '', 'Volo per Lima: aeroporto e orari da definire nella sezione Voli', 'move'), it('night', '', 'Notte in volo', 'sleep')],
+        costs: [], legs: [leg(homeAp(D), 'Aeroporto di Lima (LIM)', 'plane', 'da definire', { far: true })], stops: []
+      };
       const f = D.f, ap = D.ap, dep = toMin(f.out), arr = dep - 180, home = arr - D.drive;
       const same = f.dayOff === 0;
       const la = f.layArr ? toMin(f.layArr) : null, ld = f.layDep ? toMin(f.layDep) : null;
@@ -535,14 +543,14 @@ const BLOCKS = [
         { id: 'hotel_cusco_2', label: 'Hotel Cusco, 1 notte', eur: 50, scope: 'sh', cat: 'Alloggi', book: { site: 'Booking / sito hotel', url: '', rec: 0, open: 'Prenota con cancellazione gratuita appena le date sono fissate.' } }
       ],
       legs: [leg('Aguas Calientes', 'Machu Picchu', 'bus', '30 min (navetta)')]
-        .concat(D.ex.ac_stay ? [] : [leg('Aguas Calientes', 'Ollantaytambo', 'train', '1 h 58'), leg('Ollantaytambo', 'Cusco', 'bus', 'circa 2 h 10')]),
+        .concat(D.ex.ac_stay ? [] : [leg('Aguas Calientes', 'Cusco', 'train', '1 h 58 di treno più circa 2 h 10 di bus', { m2: 'bus', via: ['Ollantaytambo'] })]),
       stops: [['Aguas Calientes', 2040], ['Machu Picchu', 2430], ['Aguas Calientes', 2040]].concat(D.ex.ac_stay ? [] : [['Ollantaytambo', 2792], ['Cusco', 3399]])
     }) },
 
   { id: 'cusco_libero', region: 'cusco',
     make: D => ({
       title: 'Giornata libera a Cusco', short: 'Cusco', place: 'Cusco', alt: 3399, ll: [-13.5319, -71.9675],
-      legs: D.ex.ac_stay ? [leg('Aguas Calientes', 'Ollantaytambo', 'train', '1 h 58'), leg('Ollantaytambo', 'Cusco', 'bus', 'circa 2 h 10')] : [],
+      legs: D.ex.ac_stay ? [leg('Aguas Calientes', 'Cusco', 'train', '1 h 58 di treno più circa 2 h 10 di bus', { m2: 'bus', via: ['Ollantaytambo'] })] : [],
       stops: D.ex.ac_stay ? [['Aguas Calientes', 2040], ['Ollantaytambo', 2792], ['Cusco', 3399]] : [['Cusco', 3399]],
       desc: [
         'Giornata intera per esplorare Cusco senza orari, riposando in vista dell’escursione ad alta quota del giorno dopo.',
@@ -635,7 +643,7 @@ const BLOCKS = [
           it('arr', f.intlArr, `Arrivo in Italia${f.intlOff ? ' (giorno dopo)' : ''}`, 'move')
         ],
         costs: [],
-        legs: [leg('Aeroporto di Lima (LIM)', { n: `${D.ap.name} (${D.ap.code})`, ll: [D.ap.lat, D.ap.lng] }, 'plane', 'circa 13 h con scalo', { far: true })],
+        legs: [leg('Aeroporto di Lima (LIM)', homeAp(D), 'plane', 'circa 13 h con scalo', { far: true })],
         stops: [['Lima', 150]]
       };
     } },
@@ -663,7 +671,7 @@ const BLOCKS = [
           { id: 'volo_cl', label: 'Volo Cusco → Lima (bagaglio in stiva e a mano)', eur: 110, scope: 'pp', cat: 'Voli',
             book: { site: 'Sito della compagnia aerea', url: '', rec: 120, open: 'Controlla sul sito della compagnia da quando sono aperte le vendite.' } }
         ],
-        legs: [leg('Aeroporto di Cusco (CUZ)', 'Aeroporto di Lima (LIM)', 'plane', 'circa 1 h 30'), leg('Aeroporto di Lima (LIM)', { n: `${D.ap.name} (${D.ap.code})`, ll: [D.ap.lat, D.ap.lng] }, 'plane', 'circa 13 h con scalo', { far: true })],
+        legs: [leg('Aeroporto di Cusco (CUZ)', 'Aeroporto di Lima (LIM)', 'plane', 'circa 1 h 30'), leg('Aeroporto di Lima (LIM)', homeAp(D), 'plane', 'circa 13 h con scalo', { far: true })],
         stops: [['Cusco', 3399], ['Lima', 150]]
       };
     } }

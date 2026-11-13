@@ -7,12 +7,13 @@
 
 const KEY = 'peru-trip-v1';
 const DEFAULT = {
-  v: 1, start: '', persons: 2, airport: 'LIN', origin: 'Aosta',
+  v: 1, start: '', persons: 2, airport: null, origin: 'Aosta',
   fl: { out: '20:20', layover: 'Madrid', layArr: '22:40', layDep: '01:45', retLayover: 'Madrid', retLayArr: '', retLayDep: '', land: '06:30', dayOff: 1, buses: '10:30, 13:30',
         domDep: '07:30', domArr: '09:00', intlDep: '23:30', intlArr: '18:30', intlOff: 1,
         bagsCabin: 1, bagsHold: 1 },
   cfg: { imm: 90, taxi: 90, comfort: 60 },
   lima: { start: 'auto', end: 'yes' },
+  flights: { opts: [], chosen: null },
   ex: {}, custom: [], items: {}, notes: {},
   rate: { pen: 3.8728, usd: 1.1477, src: 'valore del tuo Excel', ts: null },
   fare: { p: {}, use: {}, extra: { intl: [], dom: [] } },
@@ -52,10 +53,12 @@ function setPath(o, path, v) { const p = path.split('.'); let t = o; for (let i 
 
 /* ---------- logica del viaggio ---------- */
 function derive(S0) {
-  const f = S0.fl, c = S0.cfg, ap = AIRPORTS[S0.airport];
-  const originKey = ap.fixedOrigin || (S0.origin === 'Torino' ? 'Torino' : 'Aosta');
-  const originName = ap.fixedOrigin || ORIGINS[originKey].name;
-  const drive = ap.from[originKey];
+  const f = S0.fl, c = S0.cfg;
+  const chosenFlight = !!(S0.flights && S0.flights.chosen && S0.airport && AIRPORTS[S0.airport]);
+  const ap = chosenFlight ? AIRPORTS[S0.airport] : null;
+  const originKey = (ap && ap.fixedOrigin) || (S0.origin === 'Torino' ? 'Torino' : 'Aosta');
+  const originName = (ap && ap.fixedOrigin) || ORIGINS[originKey].name;
+  const drive = ap ? ap.from[originKey] : null;
   const buses = String(f.buses).split(',').map(s => s.trim()).filter(Boolean).map(toMin).sort((a, b) => a - b);
   const lastBus = buses.length ? buses[buses.length - 1] : toMin('13:30');
   const land = toMin(f.land), ready = land + c.imm + c.taxi;
@@ -217,7 +220,7 @@ function hero() {
       <div class="controls">
         <label>Data di partenza<input type="date" data-bind="start" value="${esc(S.start)}"></label>
         <label>Persone<input type="number" min="1" max="10" data-bind="persons" data-type="int" value="${S.persons}"></label>
-        <label>Aeroporto di partenza<select data-bind="airport">${Object.values(AIRPORTS).map(a => `<option value="${a.code}" ${S.airport === a.code ? 'selected' : ''}>${a.name} (${a.code})</option>`).join('')}</select></label>
+
       </div>
     </div>
     ${S.start ? '' : '<p class="hint">Senza data i giorni restano “Giorno 1, Giorno 2…”. Scegli la data e tutto si aggiorna: date, scadenze di prenotazione, link ai voli.</p>'}
@@ -519,7 +522,7 @@ function prenTab() {
 /* ----- tab: voli ----- */
 function fareKey(kind, id) { const f = S.fl; return kind === 'intl' ? `${kind}|${id}|${S.airport}|${f.bagsCabin}|${f.bagsHold}` : `${kind}|${id}|${f.bagsCabin}|${f.bagsHold}`; }
 function syncFare() {
-  [['intl', 'volo_intl'], ['dom', 'volo_cl']].forEach(([kind, item]) => {
+  [['dom', 'volo_cl']].forEach(([kind, item]) => {
     const use = S.fare.use[kind];
     S.items[item] = S.items[item] || {};
     const p = use && S.fare.p[fareKey(kind, use)];
@@ -528,8 +531,8 @@ function syncFare() {
 }
 function fareCard(kind) {
   const list = (kind === 'intl' ? AIRLINES_INTL : AIRLINES_DOM).concat(S.fare.extra[kind]);
-  const f = S.fl, ap = AIRPORTS[S.airport];
-  const title = kind === 'intl' ? `Volo ${ap.code} → Lima e ritorno` : 'Volo Cusco → Lima';
+  const f = S.fl;
+  const title = 'Volo Cusco → Lima';
   return `<div class="panel"><h3>${title}</h3>
     <p class="small">Prezzo a persona${kind === 'intl' ? ' per andata e ritorno' : ''}, con ${f.bagsCabin} bagaglio a mano e ${f.bagsHold} in stiva. Apri il sito della compagnia, imposta gli stessi bagagli e scrivi il prezzo che vedi: il sito non può leggere i prezzi dei siti delle compagnie, ma ricorda quelli che inserisci per ogni combinazione di bagagli.</p>
     <div class="tblwrap"><table class="tbl"><tr><th>Compagnia</th><th class="r">Prezzo visto</th><th>Controllato</th><th>Uso nel preventivo</th></tr>
@@ -539,48 +542,162 @@ function fareCard(kind) {
       <td><label><input type="radio" name="use-${kind}" ${S.fare.use[kind] === a.id ? 'checked' : ''} data-act="useFare" data-kind="${kind}" data-id="${a.id}"> usa questo</label></td></tr>`; }).join('')}</table></div>
     <div class="inl"><input type="text" id="al-${kind}-n" placeholder="Altra compagnia"><input type="text" id="al-${kind}-u" placeholder="Sito (https://…)"><button class="btn sm ghost" data-act="addAirline" data-kind="${kind}">Aggiungi</button></div></div>`;
 }
+/* ----- tab: voli (confronto tra aeroporti) ----- */
+function tzDiff(startStr) {      // ore di differenza tra Italia e Lima alla data del viaggio
+  const d = startStr ? new Date(startStr + 'T12:00:00') : new Date(new Date().getFullYear(), 5, 15, 12);
+  try {
+    const p = new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Rome', timeZoneName: 'shortOffset' }).formatToParts(d).find(x => x.type === 'timeZoneName').value;
+    const m = p.match(/GMT([+-]\d+)/);
+    return (m ? +m[1] : 2) + 5;
+  } catch (e) { return 7; }
+}
+const fmtDur = m => m == null || isNaN(m) ? '–' : Math.floor(m / 60) + ' h ' + String(Math.round(m % 60)).padStart(2, '0');
+const newOpt = airport => ({ id: 'o' + Date.now() + Math.floor(Math.random() * 1000), airport, airline: '', outDate: '', dep: '', layover: '', layArr: '', layDep: '',
+  land: '', landOff: 1, retDate: '', retDep: '', retLayover: '', retLayArr: '', retLayDep: '', arr: '', arrOff: 1,
+  bagsCabin: S.fl.bagsCabin, bagsHold: S.fl.bagsHold, price: '', extra: '', url: '', note: '' });
+
+function applyOption(S0, o) {
+  const f = S0.fl, pick = (v, d) => v ? v : d;
+  S0.airport = o.airport;
+  f.out = pick(o.dep, f.out); f.layover = o.layover || ''; f.layArr = o.layArr || ''; f.layDep = o.layDep || '';
+  f.land = pick(o.land, f.land); f.dayOff = o.landOff == null ? 1 : +o.landOff;
+  f.intlDep = pick(o.retDep, f.intlDep); f.intlArr = pick(o.arr, f.intlArr); f.intlOff = o.arrOff == null ? 1 : +o.arrOff;
+  f.retLayover = o.retLayover || ''; f.retLayArr = o.retLayArr || ''; f.retLayDep = o.retLayDep || '';
+  S0.lima.start = 'auto'; S0.lima.end = 'auto';        // il programma si adatta da solo agli orari
+  const p = num(o.price);
+  S0.items.volo_intl = S0.items.volo_intl || {};
+  if (p != null) { S0.items.volo_intl.amt = p + (num(o.extra) || 0); S0.items.volo_intl.cur = 'EUR'; } else delete S0.items.volo_intl.amt;
+}
+
+function evalOption(o) {
+  const S2 = clone(S); applyOption(S2, o); S2.flights.chosen = o.id;
+  const D2 = derive(S2), days2 = buildDays(S2), T2 = totals(S2, days2);
+  const ap = AIRPORTS[o.airport], off = tzDiff(S.start);
+  const price = num(o.price), extra = num(o.extra) || 0;
+  const outMin = o.dep && o.land ? (toMin(o.land) + (+o.landOff || 0) * 1440) - toMin(o.dep) + off * 60 : null;
+  const retMin = o.retDep && o.arr ? (toMin(o.arr) + (+o.arrOff || 0) * 1440) - toMin(o.retDep) - off * 60 : null;
+  const complete = !!(o.dep && o.land && price != null);
+  const missing = [];
+  if (!o.dep) missing.push('decollo'); if (!o.land) missing.push('atterraggio a Lima'); if (price == null) missing.push('prezzo');
+  if (!o.retDep || !o.arr) missing.push('orari del ritorno');
+  const notes = [];
+  if (D2.limaStart) notes.push(o.landOff === 0 || +o.landOff === 0 ? 'Arrivi a Lima la sera: prima notte a Lima.' : 'Atterri tardi per il bus: serve una notte a Lima all’arrivo.');
+  else notes.push(`Dopo l’atterraggio prendi il bus delle ${fmt(D2.bus)} per Paracas.`);
+  notes.push(o.retDep && o.arr ? (D2.limaEnd ? 'Prima del rientro serve una notte a Lima.' : 'Rientro diretto da Cusco, senza notte a Lima.') : 'Ritorno non compilato: uso orari di esempio.');
+  const last = days2[days2.length - 1];
+  if (o.retDate && last.date && o.retDate !== isoDate(last.date)) {
+    const dd = daysBetween(last.date, new Date(o.retDate + 'T00:00:00'));
+    notes.push(dd > 0 ? `Il volo di ritorno parte ${dd} ${dd === 1 ? 'giorno' : 'giorni'} dopo la fine del programma: aggiungi giorni.` : `Il volo di ritorno parte ${-dd} ${dd === -1 ? 'giorno' : 'giorni'} prima della fine del programma: accorcia il viaggio.`);
+  }
+  if (o.outDate && S.start && o.outDate !== S.start) notes.push('Parte in una data diversa: scegliendolo, la partenza del viaggio cambia.');
+  if ((+o.bagsCabin || 0) < S.fl.bagsCabin || (+o.bagsHold || 0) < S.fl.bagsHold) notes.push('Il prezzo include meno bagagli di quelli che ti servono.');
+  const originKey = ap.fixedOrigin || (S.origin === 'Torino' ? 'Torino' : 'Aosta');
+  const drive = ap.from[originKey];
+  return { o, ap, drive, perPerson: price != null ? price + extra : null, totalPP: price != null ? T2.perPerson : null, days: T2.days,
+           outMin, retMin, tripMin: outMin == null ? null : outMin + (retMin || 0) + drive, complete, missing, notes, limaStart: D2.limaStart, limaEnd: D2.limaEnd };
+}
+
+function chooseOption(id) {
+  const o = S.flights.opts.find(x => x.id === id);
+  if (!o) return;
+  if (o.outDate && S.start && o.outDate !== S.start) {
+    const dd = new Date(o.outDate + 'T00:00:00');
+    if (!confirm(`Questo volo parte il ${fmtDateLong(dd)}: la partenza del viaggio passerà a quella data. Continuare?`)) return;
+  }
+  if (o.outDate) S.start = o.outDate;
+  S.flights.chosen = id; applyOption(S, o); save(); render();
+}
+function unchooseOption() { S.flights.chosen = null; S.airport = null; if (S.items.volo_intl) delete S.items.volo_intl.amt; save(); render(); }
+
+function optCard(o, e) {
+  const chosen = S.flights.chosen === o.id, last = CTX.days[CTX.days.length - 1];
+  const defRet = last.date ? isoDate(last.date) : '';
+  const fi = (f, label, type = 'text', extra = '', val) => `<label class="small">${label}<br><input type="${type}" data-opt="${o.id}" data-f="${f}" value="${esc(val != null ? val : (o[f] == null ? '' : o[f]))}" ${extra}></label>`;
+  const sel = (f, label, list) => `<label class="small">${label}<br><select data-opt="${o.id}" data-f="${f}" data-type="int">${list.map(([v, t]) => `<option value="${v}" ${+o[f] === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>`;
+  const known = AIRLINES_INTL.find(a => a.name.toLowerCase() === String(o.airline).trim().toLowerCase());
+  const link = o.url || (known ? known.url : '');
+  return `<div class="optcard ${chosen ? 'on' : ''}">
+    <div class="inl" style="justify-content:space-between">
+      <div class="inl">${fi('airline', 'Compagnia', 'text', 'list="airlines" style="width:170px"')}${chosen ? '<span class="chip ok">Scelto</span>' : ''}${e.complete ? '' : `<span class="chip todo">Da completare: ${esc(e.missing.join(', '))}</span>`}</div>
+      <div class="inl">${link ? `<a class="btn sm ghost" href="${esc(link)}" target="_blank" rel="noopener">Sito della compagnia</a>` : ''}<button class="btn sm ghost" data-act="optDup" data-id="${o.id}">Duplica</button><button class="btn sm ghost" data-act="optDel" data-id="${o.id}">Elimina</button></div>
+    </div>
+    <p class="small" style="margin:10px 0 4px"><b>Andata</b></p>
+    <div class="optgrid">${fi('outDate', 'Data', 'date', '', o.outDate || S.start)}${fi('dep', `Decollo da ${o.airport}`, 'time')}${fi('layover', 'Scalo (città)')}${fi('layArr', 'Arrivo allo scalo', 'time')}${fi('layDep', 'Ripartenza dallo scalo', 'time')}${fi('land', 'Atterraggio a Lima', 'time')}${sel('landOff', 'Arrivo a Lima', [[1, 'il giorno dopo'], [0, 'lo stesso giorno']])}</div>
+    <p class="small" style="margin:10px 0 4px"><b>Ritorno</b></p>
+    <div class="optgrid">${fi('retDate', 'Data', 'date', '', o.retDate || defRet)}${fi('retDep', 'Decollo da Lima', 'time')}${fi('retLayover', 'Scalo (città)')}${fi('retLayArr', 'Arrivo allo scalo', 'time')}${fi('retLayDep', 'Ripartenza dallo scalo', 'time')}${fi('arr', `Arrivo in Italia`, 'time')}${sel('arrOff', 'Arrivo in Italia', [[1, 'il giorno dopo'], [0, 'lo stesso giorno']])}</div>
+    <p class="small" style="margin:10px 0 4px"><b>Prezzo</b></p>
+    <div class="optgrid">${sel('bagsCabin', 'Bagagli a mano', [[0, '0'], [1, '1'], [2, '2']])}${sel('bagsHold', 'Bagagli in stiva', [[0, '0'], [1, '1'], [2, '2']])}${fi('price', 'Prezzo a testa, andata e ritorno (€)', 'text', 'inputmode="decimal"')}${fi('extra', 'Supplementi a testa (€)', 'text', 'inputmode="decimal"')}${fi('url', 'Link dell’offerta', 'text', 'placeholder="https://…"')}${fi('note', 'Note')}</div>
+  </div>`;
+}
+
 function voliTab() {
   const { D, days } = CTX;
-  const f = S.fl, ap = AIRPORTS[S.airport], last = days[days.length - 1];
-  const d1 = S.start ? S.start : '', d2 = last.date ? isoDate(last.date) : '';
-  const gf = `https://www.google.com/travel/flights?q=${encodeURIComponent(`Flights from ${ap.code} to LIM` + (d1 ? ` on ${d1}` : '') + (d2 ? ` through ${d2}` : ''))}`;
-  const sk = d1 && d2 ? `https://www.skyscanner.it/trasporti/voli/${ap.code.toLowerCase()}/lim/${d1.slice(2).replace(/-/g, '')}/${d2.slice(2).replace(/-/g, '')}/?adultsv2=${S.persons}` : 'https://www.skyscanner.it';
+  const f = S.fl, last = days[days.length - 1];
+  const opts = S.flights.opts, chosen = opts.find(o => o.id === S.flights.chosen);
+  const ev = {}; opts.forEach(o => { ev[o.id] = evalOption(o); });
+  const done = opts.map(o => ev[o.id]).filter(e => e.complete);
+  done.sort((a, b) => a.totalPP - b.totalPP);
+  const minTot = Math.min(...done.map(e => e.totalPP)), minTime = Math.min(...done.filter(e => e.tripMin != null).map(e => e.tripMin));
+  const gfDates = a => { const d1 = S.start || '', d2 = last.date ? isoDate(last.date) : ''; return { d1, d2 }; };
+  const gf = ap => { const { d1, d2 } = gfDates(); return `https://www.google.com/travel/flights?q=${encodeURIComponent(`Flights from ${ap.code} to LIM` + (d1 ? ` on ${d1}` : '') + (d2 ? ` through ${d2}` : ''))}`; };
+  const sk = ap => { const { d1, d2 } = gfDates(); return d1 && d2 ? `https://www.skyscanner.it/trasporti/voli/${ap.code.toLowerCase()}/lim/${d1.slice(2).replace(/-/g, '')}/${d2.slice(2).replace(/-/g, '')}/?adultsv2=${S.persons}` : 'https://www.skyscanner.it'; };
+  const legTxt = (dep, lay, la, ld, arr, off) => `${dep || '–'} → ${lay ? esc(lay) + (la || ld ? ' (' + (la || '') + (ld ? ' / ' + ld : '') + ')' : '') + ' → ' : ''}${arr || '–'}${+off ? ' (+1)' : ''}`;
+
+  const summary = chosen ? (() => { const e = ev[chosen.id];
+    return `<div class="optcard on"><div class="inl" style="justify-content:space-between"><h3 style="font-size:20px">Volo scelto: ${esc(e.ap.name)} (${e.ap.code})${chosen.airline ? ', ' + esc(chosen.airline) : ''}</h3><button class="btn sm ghost" data-act="optNone">Togli la scelta</button></div>
+      <p style="margin:6px 0">Andata: ${legTxt(chosen.dep, chosen.layover, chosen.layArr, chosen.layDep, chosen.land, chosen.landOff)}. Ritorno: ${legTxt(chosen.retDep, chosen.retLayover, chosen.retLayArr, chosen.retLayDep, chosen.arr, chosen.arrOff)}.</p>
+      <p class="small" style="margin:0">${e.perPerson != null ? `Volo ${eur0(e.perPerson)} a testa. ` : ''}Il programma usa questi orari e si adatta: ${esc(e.notes.slice(0, 2).join(' '))}</p></div>`; })()
+    : `<div class="warn">Non hai ancora scelto un volo: il programma usa orari di esempio. Compila le opzioni qui sotto, confrontale e scegli.</div>`;
+
+  const table = done.length ? `<h3 style="margin:26px 0 4px">Confronto</h3>
+    <p class="small">Il “viaggio completo” ricalcola tutto il programma con ciascun volo: prezzo, notti a Lima, giorni in più, pasti. Il tempo include il viaggio fino all’aeroporto da ${esc(D.originName)}.</p>
+    <div class="tblwrap"><table class="tbl"><tr><th>Opzione</th><th>Andata</th><th>Ritorno</th><th>Tempo di viaggio</th><th class="r">Volo a testa</th><th class="r">Viaggio completo a testa</th><th>Cosa cambia nel programma</th><th></th></tr>
+    ${done.map(e => { const o = e.o; return `<tr class="${S.flights.chosen === o.id ? 'paid' : ''}"><td><b>${e.ap.code}</b> ${esc(o.airline || '')}<br><span class="small">${o.bagsCabin} a mano, ${o.bagsHold} in stiva</span>
+      <br>${e.totalPP === minTot ? '<span class="chip ok">Più economico</span> ' : ''}${e.tripMin != null && e.tripMin === minTime ? '<span class="chip">Più veloce</span>' : ''}</td>
+      <td>${legTxt(o.dep, o.layover, o.layArr, o.layDep, o.land, o.landOff)}</td><td>${o.retDep && o.arr ? legTxt(o.retDep, o.retLayover, o.retLayArr, o.retLayDep, o.arr, o.arrOff) : '–'}</td>
+      <td>Andata ${fmtDur(e.outMin)}<br>${e.retMin != null ? 'Ritorno ' + fmtDur(e.retMin) + '<br>' : ''}Fino all’aeroporto ${fmtDur(e.drive)}</td>
+      <td class="r">${eur0(e.perPerson)}</td><td class="r"><b>${eur0(e.totalPP)}</b><br><span class="small">${e.days} giorni</span></td>
+      <td><span class="small">${e.notes.map(esc).join('<br>')}</span></td>
+      <td>${S.flights.chosen === o.id ? '<span class="chip ok">Scelto</span>' : `<button class="btn sm" data-act="optChoose" data-id="${o.id}">Scegli</button>`}</td></tr>`; }).join('')}
+    </table></div>` : '<p class="small" style="margin-top:22px">Quando almeno un’opzione ha decollo, atterraggio e prezzo, qui compare il confronto.</p>';
+
+  const sections = Object.values(AIRPORTS).map(ap => {
+    const list = opts.filter(o => o.airport === ap.code);
+    const originKey = ap.fixedOrigin || (S.origin === 'Torino' ? 'Torino' : 'Aosta');
+    return `<div style="margin-top:26px"><div class="inl" style="justify-content:space-between"><h3 style="font-size:20px">${esc(ap.name)} (${ap.code})</h3>
+      <div class="inl"><a class="btn sm ghost" href="${esc(gf(ap))}" target="_blank" rel="noopener">Google Voli</a><a class="btn sm ghost" href="${esc(sk(ap))}" target="_blank" rel="noopener">Skyscanner</a><button class="btn sm" data-act="optAdd" data-ap="${ap.code}">Aggiungi un’opzione</button></div></div>
+      ${list.length ? list.map(o => optCard(o, ev[o.id])).join('') : `<p class="small">Nessuna opzione inserita per ${ap.code}.</p>`}</div>`;
+  }).join('');
+
   const inp = (path, label, type = 'time', extra = '') => `<label class="small">${label}<br><input type="${type}" data-bind="${path}" value="${esc(path.split('.').reduce((o, k) => o[k], S))}" ${extra}></label>`;
-  return `<h2>Voli e orari di arrivo</h2>
-  <p class="lead">I voli si prenotano sempre dal sito della compagnia, mai da intermediari. Google Voli e Skyscanner qui servono solo per scoprire quali compagnie e orari esistono: poi si va al sito ufficiale.</p>
-  <div class="grid2">
-    <div class="panel"><h3>Dove si parte</h3>
-      <label class="small">Partenza da<br><select data-bind="origin" ${ap.fixedOrigin ? 'disabled' : ''}>${ap.fixedOrigin
-        ? `<option>${esc(ap.fixedOrigin)}</option>`
-        : Object.entries(ORIGINS).map(([k, o]) => `<option value="${k}" ${D.originName === o.name ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label>
-      <p>${esc(D.originName)} verso ${esc(ap.name)} (${ap.code}).</p>
-      <p class="small">Si arriva in aeroporto 3 ore prima del decollo. Con Pisa si parte sempre da Vecchiano.</p></div>
+  return `<datalist id="airlines">${AIRLINES_INTL.map(a => `<option value="${esc(a.name)}">`).join('')}</datalist>
+  <h2>Voli</h2>
+  <p class="lead">Raccogli le offerte di tutti gli aeroporti, confrontale e scegli: il programma si adatta al volo scelto. I voli si prenotano sempre dal sito della compagnia: Google Voli e Skyscanner servono solo per scoprire compagnie e orari.</p>
+  ${summary}
+  <div class="grid2" style="margin-top:20px">
+    <div class="panel"><h3>Da dove parti</h3>
+      <label class="small">Partenza da<br><select data-bind="origin">${Object.entries(ORIGINS).map(([k, o]) => `<option value="${k}" ${S.origin === k ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label>
+      <p class="small">Per Pisa si parte sempre da Vecchiano. Si arriva in aeroporto 3 ore prima del decollo.</p></div>
     <div class="panel"><h3>Bagagli per persona</h3>
       <div class="inl"><label class="small">A mano<br><select data-bind="fl.bagsCabin" data-type="int">${[0, 1, 2].map(n => `<option ${f.bagsCabin === n ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
       <label class="small">In stiva<br><select data-bind="fl.bagsHold" data-type="int">${[0, 1, 2].map(n => `<option ${f.bagsHold === n ? 'selected' : ''}>${n}</option>`).join('')}</select></label></div>
-      <p class="small">I prezzi che scrivi sotto vengono ricordati per ogni combinazione di bagagli e di aeroporto.</p>
-      <div class="inl"><a class="btn sm ghost" href="${esc(gf)}" target="_blank" rel="noopener">Confronta su Google Voli</a><a class="btn sm ghost" href="${esc(sk)}" target="_blank" rel="noopener">Confronta su Skyscanner</a></div></div>
+      <p class="small">Il confronto segnala le offerte con meno bagagli di questi.</p></div>
   </div>
-  <div class="grid2" style="margin-top:24px">${fareCard('intl')}${fareCard('dom')}</div>
-  <h3 style="margin:24px 0 6px">Orari che guidano il programma</h3>
-  <p class="small">Scrivi gli orari dei voli scelti: il programma del primo e dell’ultimo giorno si ricalcola e il sito decide se serve una notte a Lima.</p>
+  ${table}
+  <h3 style="margin:30px 0 0">Opzioni per aeroporto</h3>
+  ${sections}
+  <h3 style="margin:34px 0 6px">Arrivo e rientro a Lima</h3>
+  <p class="small">Servono al programma per capire se conviene dormire a Lima. L’orario d’atterraggio e del volo di ritorno arrivano dal volo scelto.</p>
   <div class="inl" style="gap:18px">
-    ${inp('fl.out', `Decollo da ${ap.code}`)}${inp('fl.layover', 'Scalo (città)', 'text')}${inp('fl.layArr', 'Arrivo allo scalo')}${inp('fl.layDep', 'Ripartenza dallo scalo')}${inp('fl.land', 'Atterraggio a Lima')}
-    <label class="small">Arrivo a Lima<br><select data-bind="fl.dayOff" data-type="int"><option value="1" ${f.dayOff === 1 ? 'selected' : ''}>il giorno dopo</option><option value="0" ${f.dayOff === 0 ? 'selected' : ''}>lo stesso giorno</option></select></label>
-  </div>
-  <div class="inl" style="gap:18px;margin-top:12px">
     ${inp('fl.buses', 'Orari bus Cruz del Sur Lima → Paracas (separati da virgola)', 'text', 'style="width:260px"')}
     ${inp('cfg.imm', 'Minuti per dogana e bagagli', 'number', 'data-type="int" style="width:90px"')}
     ${inp('cfg.taxi', 'Minuti dall’aeroporto al terminal', 'number', 'data-type="int" style="width:90px"')}
     ${inp('cfg.comfort', 'Margine minimo prima del bus (minuti)', 'number', 'data-type="int" style="width:90px"')}
   </div>
   <p class="small"><b>${esc(startMsg(D))}</b></p>
-  <div class="inl" style="gap:18px;margin-top:12px">
-    ${inp('fl.domDep', 'Volo Cusco → Lima: decollo')}${inp('fl.domArr', 'Volo Cusco → Lima: atterraggio')}${inp('fl.intlDep', 'Volo Lima → Italia: decollo')}${inp('fl.intlArr', 'Arrivo in Italia')}
-    <label class="small">Arrivo in Italia<br><select data-bind="fl.intlOff" data-type="int"><option value="1" ${f.intlOff === 1 ? 'selected' : ''}>il giorno dopo</option><option value="0" ${f.intlOff === 0 ? 'selected' : ''}>lo stesso giorno</option></select></label>
-  </div>
-  <div class="inl" style="gap:18px;margin-top:12px">${inp('fl.retLayover', 'Scalo al ritorno (città)', 'text')}${inp('fl.retLayArr', 'Arrivo allo scalo')}${inp('fl.retLayDep', 'Ripartenza dallo scalo')}</div>
-  <p class="small"><b>${esc(endMsg(D))}</b></p>`;
+  <div class="inl" style="gap:18px;margin-top:12px">${inp('fl.domDep', 'Volo Cusco → Lima: decollo')}${inp('fl.domArr', 'Volo Cusco → Lima: atterraggio')}</div>
+  <p class="small"><b>${esc(endMsg(D))}</b></p>
+  <div class="grid2" style="margin-top:20px">${fareCard('dom')}</div>`;
 }
 
 /* ----- tab: mappa e tempi ----- */
@@ -607,10 +724,11 @@ const MODE_STYLE = {
 const lineSample = m => { const st = MODE_STYLE[m]; return `<svg width="38" height="8" viewBox="0 0 38 8" aria-hidden="true"><line x1="2" y1="4" x2="36" y2="4" stroke="${st.color}" stroke-width="${st.weight}" stroke-dasharray="${st.dashArray || ''}" stroke-linecap="${st.lineCap || 'butt'}"/></svg>`; };
 
 const resolvePt = x => typeof x === 'string' ? { n: x, ll: PLACE[x] } : x;
-const modeName = l => MODES[l.m] + (l.night ? ' (di notte)' : '');
-const modeHTML = l => `<span class="modecell" style="color:${MODE_STYLE[l.m].color}">${icon(l.m, 19)}${l.night ? icon('moon', 14) : ''}</span> ${esc(MODES[l.m])}${l.night ? ' di notte' : ''}`;
+const modeName = l => MODES[l.m] + (l.m2 ? ' + ' + MODES[l.m2] : '') + (l.night ? ' (di notte)' : '');
+const modeHTML = l => `<span class="modecell" style="color:${MODE_STYLE[l.m].color}">${icon(l.m, 19)}${l.m2 ? icon(l.m2, 19) : ''}${l.night ? icon('moon', 14) : ''}</span> ${esc(MODES[l.m])}${l.m2 ? ' + ' + esc(MODES[l.m2]) : ''}${l.night ? ' di notte' : ''}`;
 function gmapsLink(l) {
   if (l.m === 'plane' || l.m === 'boat') return '';
+  if (l.m2) return `https://www.google.com/maps/dir/?api=1&origin=${resolvePt(l.a).ll.join(',')}&destination=${resolvePt(l.b).ll.join(',')}&travelmode=transit`;
   const a = resolvePt(l.a), b = resolvePt(l.b);
   let u = `https://www.google.com/maps/dir/?api=1&origin=${a.ll.join(',')}&destination=${b.ll.join(',')}&travelmode=${l.m === 'train' ? 'transit' : (l.m === 'foot' ? 'walking' : 'driving')}`;
   if (l.via && l.via.length) u += '&waypoints=' + l.via.map(v => PLACE[v].join(',')).join('%7C');
@@ -620,7 +738,7 @@ function mappaTab() {
   const { days } = CTX;
   const legs = [];
   days.forEach(d => (d.legs || []).forEach(l => legs.push({ n: d.n, date: d.date, l })));
-  const used = [...new Set(legs.map(x => x.l.m))];
+  const used = [...new Set(legs.flatMap(x => [x.l.m, x.l.m2]).filter(Boolean))];
   const legend = used.map(m => `<span class="lg" style="color:${MODE_STYLE[m].color}">${icon(m, 18)}<span style="color:var(--ink)">${MODES[m]}</span>${lineSample(m)}</span>`).join('') + (legs.some(x => x.l.night) ? `<span class="lg">${icon('moon', 16)}<span>di notte</span></span>` : '');
   return `<h2>Mappa e tempi di percorrenza</h2>
   <p class="lead">Le tappe nell’ordine in cui le percorri, con il mezzo di ogni spostamento. Le strade sono disegnate seguendo la rete stradale; per il percorso preciso apri il tragitto in Google Maps dalla tabella.</p>
@@ -670,6 +788,17 @@ async function initMap() {
     if (l.far) continue;
     const a = resolvePt(l.a), b = resolvePt(l.b);
     if (!a.ll || !b.ll || l.m === 'foot') continue;
+    if (l.m2 && l.via && l.via.length) {          // tragitto composto: treno fino alla tappa, poi bus su strada
+      const v = PLACE[l.via[0]];
+      L.polyline([a.ll, v], { ...MODE_STYLE[l.m] }).addTo(MAP);
+      L.marker([(a.ll[0] + v[0]) / 2, (a.ll[1] + v[1]) / 2], { icon: modeIcon({ m: l.m }) }).addTo(MAP).bindPopup(`<b>Giorno ${d.n}</b><br>${esc(a.n)} → ${esc(l.via[0])}<br>${esc(MODES[l.m])}`);
+      let p2 = [v, b.ll], st2 = { ...MODE_STYLE[l.m2] };
+      try { p2 = await getRoute([v, b.ll]); } catch (e) { fails++; st2 = { color: '#8A969C', weight: 2.5, dashArray: '2 6' }; }
+      if (tok !== MAPTOK) return;
+      L.polyline(p2, st2).addTo(MAP);
+      L.marker(p2[Math.floor(p2.length / 2)], { icon: modeIcon({ m: l.m2 }) }).addTo(MAP).bindPopup(`<b>Giorno ${d.n}</b><br>${esc(l.via[0])} → ${esc(b.n)}<br>${esc(MODES[l.m2])}`);
+      continue;
+    }
     let pts = [a.ll, b.ll], style = { ...MODE_STYLE[l.m] }, road = l.m === 'car' || l.m === 'bus';
     if (road) {
       try { pts = await getRoute([a.ll].concat((l.via || []).map(v => PLACE[v]), [b.ll])); }
@@ -777,6 +906,11 @@ document.addEventListener('click', ev => {
   const act = el.dataset.act, id = el.dataset.id;
   if (act === 'tab') { S.ui.tab = el.dataset.tab; save(); render(); window.scrollTo(0, 0); }
   else if (act === 'prof') { S.ui.prof = el.dataset.v; save(); render(); }
+  else if (act === 'optAdd') { S.flights.opts.push(newOpt(el.dataset.ap)); save(); render(); }
+  else if (act === 'optDup') { const o = S.flights.opts.find(x => x.id === id); const c = clone(o); c.id = 'o' + Date.now() + Math.floor(Math.random() * 1000); S.flights.opts.splice(S.flights.opts.indexOf(o) + 1, 0, c); save(); render(); }
+  else if (act === 'optDel') { if (confirm('Eliminare questa opzione di volo?')) { if (S.flights.chosen === id) { S.flights.chosen = null; S.airport = null; if (S.items.volo_intl) delete S.items.volo_intl.amt; } S.flights.opts = S.flights.opts.filter(x => x.id !== id); save(); render(); } }
+  else if (act === 'optChoose') chooseOption(id);
+  else if (act === 'optNone') unchooseOption();
   else if (act === 'toggleDay') { S.ui.open[id] = !S.ui.open[id]; save(); render(); }
   else if (act === 'openall') { CTX.days.forEach(d => { S.ui.open[d.id] = true; }); save(); render(); }
   else if (act === 'closeall') { S.ui.open = {}; save(); render(); }
@@ -825,6 +959,14 @@ document.addEventListener('change', ev => {
     else if (f === 'cur') S.items[id].cur = el.value;
     else if (el.value === '') delete S.items[id][f]; else S.items[id][f] = el.value;
     save(); render();
+  } else if (el.dataset.opt) {
+    const o = S.flights.opts.find(x => x.id === el.dataset.opt), fld = el.dataset.f;
+    if (o) {
+      let v = el.value; if (el.dataset.type === 'int') { v = parseInt(v, 10); if (isNaN(v)) return; }
+      o[fld] = v;
+      if (S.flights.chosen === o.id) { if (fld === 'outDate' && v) S.start = v; applyOption(S, o); }
+      save(); render();
+    }
   } else if (el.dataset.note) { S.notes[el.dataset.note] = el.value; save(); }
   else if (el.dataset.fare) {
     const n = num(el.value);

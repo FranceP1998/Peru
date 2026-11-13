@@ -48,4 +48,8 @@ Il sito è pubblico: chi conosce l'indirizzo può vedere e modificare il viaggio
 
 ## Tempi per gli aeroporti
 
-I minuti in auto da Aosta, da Torino (Via Timavo 6) e da Vecchiano sono in `data.js`, nella costante `AIRPORTS` (campo `from`). Non si cambiano dal sito. Sono valori approssimativi: controllali con Google Maps.
+I minuti in auto da Aosta, da Torino e da Vecchiano sono in `data.js`, nella costante `AIRPORTS` (campo `from`). Non si cambiano dal sito. Sono valori approssimativi: controllali con Google Maps.
+
+## Confronto voli
+
+Nella sezione Voli inserisci, per ogni aeroporto, tutte le offerte che trovi (compagnia, orari di andata e ritorno con scalo, bagagli, prezzo). Il sito le confronta ricalcolando l'intero programma (notti a Lima, giorni in più, pasti) e ti fa scegliere: il volo scelto aggiorna orari, scalo, prezzo e notti a Lima. Finché non scegli, il programma usa orari di esempio.
