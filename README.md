@@ -46,9 +46,9 @@ Il sito è pubblico: chi conosce l'indirizzo può vedere e modificare il viaggio
 - Altimetria: due viste, "Pernottamenti" e "Completa" (tutte le tappe con spostamento). Le altitudini sono indicative, e si modificano in `data.js` (campo `stops` di ogni giorno).
 - Mappa: ogni spostamento ha il suo mezzo (aereo, auto, bus, treno, barca, a piedi), con la luna per i tragitti di notte. Le strade di auto e bus sono calcolate al volo da OpenStreetMap (servizio pubblico OSRM) e ricordate nel browser. Se non si caricano, la mappa mostra linee dritte e la tabella ha il link a Google Maps per ogni tratto.
 
-## Tempi per gli aeroporti
+## Trasferimento in aeroporto
 
-I minuti in auto da Aosta, da Torino e da Vecchiano sono in `data.js`, nella costante `AIRPORTS` (campo `from`). Non si cambiano dal sito. Sono valori approssimativi: controllali con Google Maps.
+Distanze, minuti e pedaggi (solo andata) da Aosta, da Torino e da Vecchiano sono in `data.js` (costanti `VENARIA`, `CAR`, `PISA_MIN`) e non si cambiano dal sito. Da Torino e da Aosta per Caselle si lascia l'auto a Venaria Reale e si prende il treno urbano: gli orari SFM sono nella costante `SFM`, validi dal 20 gennaio 2024, da riverificare prima di partire. Dal sito si modificano il prezzo della benzina, il consumo medio e i prezzi dei parcheggi. In aeroporto si arriva 2 ore e 30 prima del decollo (`ARRIVE_BEFORE`).
 
 ## Confronto voli
 

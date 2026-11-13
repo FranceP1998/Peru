@@ -14,6 +14,7 @@ const DEFAULT = {
   cfg: { imm: 90, taxi: 90, comfort: 60 },
   lima: { start: 'auto', end: 'yes' },
   flights: { opts: [], chosen: null },
+  fuel: { price: 1.99, cons: 7 }, parking: {}, parkNote: {},
   ex: {}, custom: [], items: {}, notes: {},
   rate: { pen: 3.8728, usd: 1.1477, src: 'valore del tuo Excel', ts: null },
   fare: { p: {}, use: {}, extra: { intl: [], dom: [] } },
@@ -58,7 +59,6 @@ function derive(S0) {
   const ap = chosenFlight ? AIRPORTS[S0.airport] : null;
   const originKey = (ap && ap.fixedOrigin) || (S0.origin === 'Torino' ? 'Torino' : 'Aosta');
   const originName = (ap && ap.fixedOrigin) || ORIGINS[originKey].name;
-  const drive = ap ? ap.from[originKey] : null;
   const buses = String(f.buses).split(',').map(s => s.trim()).filter(Boolean).map(toMin).sort((a, b) => a - b);
   const lastBus = buses.length ? buses[buses.length - 1] : toMin('13:30');
   const land = toMin(f.land), ready = land + c.imm + c.taxi;
@@ -70,7 +70,7 @@ function derive(S0) {
   const gap = toMin(f.intlDep) - toMin(f.domArr);
   const endRec = gap < 60 + 180 + c.comfort;
   const limaEnd = S0.lima.end === 'auto' ? endRec : S0.lima.end === 'yes';
-  return { S: S0, f, c, ap, drive, originName, buses, lastBus, land, ready, bus, busUse, bus2, startRec, limaStart, gap, endRec, limaEnd, ex: S0.ex };
+  return { S: S0, f, c, ap, originKey, originName, buses, lastBus, land, ready, bus, busUse, bus2, startRec, limaStart, gap, endRec, limaEnd, ex: S0.ex };
 }
 
 const allExtras = S0 => EXTRAS.concat((S0.custom || []).map(toExtra));
@@ -114,6 +114,7 @@ function buildDays(S0) {
     for (const d of out) if (e.ops[d.id]) applyOps(d, e.ops[d.id], e.id);
   }
   out.forEach((d, i) => { d.n = i + 1; d.date = dateAdd(S0, i); });
+  out.forEach(d => { const b = BLOCKS.find(x => x.id === d.id); if (b && b.post) b.post(d, D); });
   return out;
 }
 
@@ -130,7 +131,9 @@ const lineEur = (S0, c) => isPaid(S0, c) ? +S0.items[c.id].paid : lineEst(S0, c)
 
 function allCosts(S0, days) {
   const L = [];
-  GENERAL(derive(S0)).forEach(c => L.push({ ...c, day: null }));
+  const Dd = derive(S0);
+  GENERAL(Dd).forEach(c => L.push({ ...c, day: null }));
+  groundCosts(S0, Dd, days).forEach(c => L.push({ ...c, day: null }));
   days.forEach(d => d.costs.forEach(c => L.push({ ...c, day: d })));
   L.push({ ...MEAL_ITEM, label: 'Pasti (stima giornaliera)', cat: 'Pasti', perDay: true, mult: days.length, day: null });
   return L;
@@ -591,10 +594,14 @@ function evalOption(o) {
   }
   if (o.outDate && S.start && o.outDate !== S.start) notes.push('Parte in una data diversa: scegliendolo, la partenza del viaggio cambia.');
   if ((+o.bagsCabin || 0) < S.fl.bagsCabin || (+o.bagsHold || 0) < S.fl.bagsHold) notes.push('Il prezzo include meno bagagli di quelli che ti servono.');
-  const originKey = ap.fixedOrigin || (S.origin === 'Torino' ? 'Torino' : 'Aosta');
-  const drive = ap.from[originKey];
-  return { o, ap, drive, perPerson: price != null ? price + extra : null, totalPP: price != null ? T2.perPerson : null, days: T2.days,
-           outMin, retMin, tripMin: outMin == null ? null : outMin + (retMin || 0) + drive, complete, missing, notes, limaStart: D2.limaStart, limaEnd: D2.limaEnd };
+  const plan = outboundPlan(D2);
+  if (plan && plan.mode === 'train' && !plan.found) notes.push('Nessun treno abbastanza presto per questo volo: da organizzare un altro modo per arrivare a Caselle.');
+  if (plan && plan.mode === 'train' && plan.found && plan.trainArr < toMin(o.dep) - ARRIVE_BEFORE - 60) notes.push(`Arrivi in aeroporto alle ${fmt(plan.trainArr)}: il treno utile è molto prima.`);
+  if (D2.ap && D2.ap.mode === 'car') { const need = parkNeed(S2, D2, days2); if (!parkPrice(S2, o.airport, need.charged)) notes.push(`Manca il prezzo del parcheggio per ${need.charged} giorni: compilalo nella scheda Parcheggi.`); }
+  const groundCost = T2.L.filter(c => /^(trasf_|parcheggio)/.test(c.id)).reduce((a, c) => a + lineEur(S2, c), 0);
+  const drive = plan && plan.groundMin != null ? plan.groundMin : null;
+  return { o, ap, drive, groundCost, perPerson: price != null ? price + extra : null, totalPP: price != null ? T2.perPerson : null, days: T2.days,
+           outMin, retMin, tripMin: outMin == null ? null : outMin + (retMin || 0) + (drive || 0), complete, missing, notes, limaStart: D2.limaStart, limaEnd: D2.limaEnd };
 }
 
 function chooseOption(id) {
@@ -650,12 +657,12 @@ function voliTab() {
     : `<div class="warn">Non hai ancora scelto un volo: il programma usa orari di esempio. Compila le opzioni qui sotto, confrontale e scegli.</div>`;
 
   const table = done.length ? `<h3 style="margin:26px 0 4px">Confronto</h3>
-    <p class="small">Il “viaggio completo” ricalcola tutto il programma con ciascun volo: prezzo, notti a Lima, giorni in più, pasti. Il tempo include il viaggio fino all’aeroporto da ${esc(D.originName)}.</p>
+    <p class="small">Il “viaggio completo” ricalcola tutto il programma con ciascun volo: prezzo, notti a Lima, giorni in più, pasti. Il tempo include il viaggio fino all’aeroporto da ${esc(D.originName)}, che si arriva 2 ore e 30 prima del decollo.</p>
     <div class="tblwrap"><table class="tbl"><tr><th>Opzione</th><th>Andata</th><th>Ritorno</th><th>Tempo di viaggio</th><th class="r">Volo a testa</th><th class="r">Viaggio completo a testa</th><th>Cosa cambia nel programma</th><th></th></tr>
     ${done.map(e => { const o = e.o; return `<tr class="${S.flights.chosen === o.id ? 'paid' : ''}"><td><b>${e.ap.code}</b> ${esc(o.airline || '')}<br><span class="small">${o.bagsCabin} a mano, ${o.bagsHold} in stiva</span>
       <br>${e.totalPP === minTot ? '<span class="chip ok">Più economico</span> ' : ''}${e.tripMin != null && e.tripMin === minTime ? '<span class="chip">Più veloce</span>' : ''}</td>
       <td>${legTxt(o.dep, o.layover, o.layArr, o.layDep, o.land, o.landOff)}</td><td>${o.retDep && o.arr ? legTxt(o.retDep, o.retLayover, o.retLayArr, o.retLayDep, o.arr, o.arrOff) : '–'}</td>
-      <td>Andata ${fmtDur(e.outMin)}<br>${e.retMin != null ? 'Ritorno ' + fmtDur(e.retMin) + '<br>' : ''}Fino all’aeroporto ${fmtDur(e.drive)}</td>
+      <td>Andata ${fmtDur(e.outMin)}<br>${e.retMin != null ? 'Ritorno ' + fmtDur(e.retMin) + '<br>' : ''}Fino all’aeroporto ${fmtDur(e.drive)}<br><span class="small">Trasferimento e parcheggio ${eur0(e.groundCost)}</span></td>
       <td class="r">${eur0(e.perPerson)}</td><td class="r"><b>${eur0(e.totalPP)}</b><br><span class="small">${e.days} giorni</span></td>
       <td><span class="small">${e.notes.map(esc).join('<br>')}</span></td>
       <td>${S.flights.chosen === o.id ? '<span class="chip ok">Scelto</span>' : `<button class="btn sm" data-act="optChoose" data-id="${o.id}">Scegli</button>`}</td></tr>`; }).join('')}
@@ -670,6 +677,27 @@ function voliTab() {
   }).join('');
 
   const inp = (path, label, type = 'time', extra = '') => `<label class="small">${label}<br><input type="${type}" data-bind="${path}" value="${esc(path.split('.').reduce((o, k) => o[k], S))}" ${extra}></label>`;
+
+  const need = parkNeed(S, D, days);
+  const okey = S.origin === 'Torino' ? 'Torino' : 'Aosta';
+  const kmRows = ['TRN', 'LIN', 'MXP', 'BGY'].map(code => {
+    const ap = AIRPORTS[code], c = ap.mode === 'train' ? VENARIA[okey] : CAR[okey][code];
+    return `<tr><td>${esc(ORIGINS[okey].name)} → ${ap.mode === 'train' ? 'Venaria Reale, poi treno a Caselle' : esc(ap.name)}</td><td>${c.km} km</td><td>${fmtDur(c.min)}</td><td>${c.toll ? eur2(c.toll) : '–'}</td></tr>`;
+  }).join('') + `<tr><td>Vecchiano → Pisa Galilei</td><td>–</td><td>${fmtDur(PISA_MIN)}</td><td>–</td></tr>`;
+  const parkRows = ['LIN', 'MXP', 'BGY'].map(code => {
+    const ap = AIRPORTS[code], m = S.parking[code] || {};
+    const others = Object.keys(m).filter(k => +k !== need.n0 && +k !== need.n0 + 1).sort((a, b) => a - b).map(k => `${k} giorni ${eur0(m[k])}`).join(', ');
+    return `<tr><td><b>${esc(ap.name)}</b> (${code})<br><input type="text" style="width:190px;margin-top:4px" data-parknote="${code}" placeholder="Tipo di parcheggio" value="${esc(S.parkNote[code] || '')}">${others ? `<br><span class="small">Altri prezzi inseriti: ${esc(others)}</span>` : ''}</td>
+      <td class="r">€ <input class="num" type="text" inputmode="decimal" data-park="${code}" data-n="${need.n0}" value="${m[need.n0] != null ? m[need.n0] : ''}"></td>
+      <td class="r">€ <input class="num" type="text" inputmode="decimal" data-park="${code}" data-n="${need.n0 + 1}" value="${m[need.n0 + 1] != null ? m[need.n0 + 1] : ''}"></td></tr>`;
+  }).join('');
+  const transferPanel = `<h3 style="margin:30px 0 6px">Trasferimento in aeroporto</h3>
+    <p class="small">Dal volo scelto il sito ricalcola a che ora si parte, quanto costano carburante, pedaggi, treno e parcheggio, e li somma al viaggio. Distanze, tempi e pedaggi (solo andata, il sito li raddoppia) sono nel file dei dati. Da Torino a Caselle e da Aosta a Caselle si lascia l’auto gratis a Venaria Reale e si prende il treno urbano (${eur2(TRAIN_FARE)} a tratta). Per Pisa nessun costo: ti accompagnano.</p>
+    <div class="inl" style="gap:18px;margin-bottom:10px">${inp('fuel.price', 'Prezzo benzina (€/L)', 'text', 'inputmode="decimal" data-type="num" style="width:110px"')}${inp('fuel.cons', 'Consumo medio (L/100 km)', 'text', 'inputmode="decimal" data-type="num" style="width:110px"')}</div>
+    <div class="tblwrap"><table class="tbl"><tr><th>Tragitto (solo andata)</th><th>Distanza</th><th>Tempo</th><th class="r">Pedaggi</th></tr>${kmRows}</table></div>
+    <h3 style="margin:22px 0 6px">Parcheggi</h3>
+    <p class="small">La sosta è di circa ${Math.floor(need.H / 24)} giorni e ${Math.round(need.H % 24)} ore con gli orari ${chosen ? 'del volo scelto' : 'di esempio'}: ${need.charged === need.n0 ? `si pagano ${need.n0} giorni` : `scatta il giorno in più, quindi si pagano ${need.charged} giorni`}. Compila il prezzo sia per ${need.n0} giorni sia per ${need.n0 + 1}: il sito usa quello giusto in base agli orari del volo. Per un numero di giorni mancante stima da quelli inseriti e lo segna come stima.</p>
+    <div class="tblwrap"><table class="tbl"><tr><th>Aeroporto</th><th class="r">${need.n0} giorni (esatti)</th><th class="r">${need.n0 + 1} giorni (uno in più)</th></tr>${parkRows}</table></div>`;
   return `<datalist id="airlines">${AIRLINES_INTL.map(a => `<option value="${esc(a.name)}">`).join('')}</datalist>
   <h2>Voli</h2>
   <p class="lead">Raccogli le offerte di tutti gli aeroporti, confrontale e scegli: il programma si adatta al volo scelto. I voli si prenotano sempre dal sito della compagnia: Google Voli e Skyscanner servono solo per scoprire compagnie e orari.</p>
@@ -677,13 +705,14 @@ function voliTab() {
   <div class="grid2" style="margin-top:20px">
     <div class="panel"><h3>Da dove parti</h3>
       <label class="small">Partenza da<br><select data-bind="origin">${Object.entries(ORIGINS).map(([k, o]) => `<option value="${k}" ${S.origin === k ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label>
-      <p class="small">Per Pisa si parte sempre da Vecchiano. Si arriva in aeroporto 3 ore prima del decollo.</p></div>
+      <p class="small">Per Pisa si parte sempre da Vecchiano. In aeroporto si arriva 2 ore e 30 prima del decollo.</p></div>
     <div class="panel"><h3>Bagagli per persona</h3>
       <div class="inl"><label class="small">A mano<br><select data-bind="fl.bagsCabin" data-type="int">${[0, 1, 2].map(n => `<option ${f.bagsCabin === n ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
       <label class="small">In stiva<br><select data-bind="fl.bagsHold" data-type="int">${[0, 1, 2].map(n => `<option ${f.bagsHold === n ? 'selected' : ''}>${n}</option>`).join('')}</select></label></div>
       <p class="small">Il confronto segnala le offerte con meno bagagli di questi.</p></div>
   </div>
   ${table}
+  ${transferPanel}
   <h3 style="margin:30px 0 0">Opzioni per aeroporto</h3>
   ${sections}
   <h3 style="margin:34px 0 6px">Arrivo e rientro a Lima</h3>
@@ -948,6 +977,7 @@ document.addEventListener('change', ev => {
   if (el.dataset.bind) {
     let v = el.value;
     if (el.dataset.type === 'int') { v = parseInt(v, 10); if (isNaN(v)) return; }
+    if (el.dataset.type === 'num') { v = num(v); if (v == null || v < 0) return; }
     if (el.dataset.bind === 'persons') v = Math.max(1, Math.min(10, v));
     setPath(S, el.dataset.bind, v);
     if (el.dataset.bind === 'airport' || el.dataset.bind.startsWith('fl.bags')) syncFare();
@@ -959,6 +989,12 @@ document.addEventListener('change', ev => {
     else if (f === 'cur') S.items[id].cur = el.value;
     else if (el.value === '') delete S.items[id][f]; else S.items[id][f] = el.value;
     save(); render();
+  } else if (el.dataset.park) {
+    const code = el.dataset.park, n = el.dataset.n, v = num(el.value);
+    S.parking[code] = S.parking[code] || {};
+    if (v == null) delete S.parking[code][n]; else S.parking[code][n] = v;
+    save(); render();
+  } else if (el.dataset.parknote) { S.parkNote[el.dataset.parknote] = el.value; save();
   } else if (el.dataset.opt) {
     const o = S.flights.opts.find(x => x.id === el.dataset.opt), fld = el.dataset.f;
     if (o) {

@@ -25,15 +25,126 @@ const ORIGINS = {
   Aosta:  { name: 'Aosta' },
   Torino: { name: 'Torino' }
 };
-// Minuti in auto dalla città di partenza all'aeroporto. Valori approssimativi da controllare con Google Maps:
-// si cambiano solo qui, non dal sito.
+// mode: car = in auto fino all'aeroporto e parcheggio; train = auto a Venaria Reale (gratis) e treno urbano; lift = ti accompagnano.
 const AIRPORTS = {
-  TRN: { code: 'TRN', name: 'Torino Caselle',        lat: 45.2008, lng: 7.6496, from: { Aosta: 80,  Torino: 25 } },
-  LIN: { code: 'LIN', name: 'Milano Linate',         lat: 45.4451, lng: 9.2767, from: { Aosta: 120, Torino: 105 } },
-  MXP: { code: 'MXP', name: 'Milano Malpensa',       lat: 45.6306, lng: 8.7281, from: { Aosta: 110, Torino: 85 } },
-  BGY: { code: 'BGY', name: 'Bergamo Orio al Serio', lat: 45.6739, lng: 9.7042, from: { Aosta: 140, Torino: 125 } },
-  PSA: { code: 'PSA', name: 'Pisa Galilei',          lat: 43.6839, lng: 10.3927, from: { 'Vecchiano (PI)': 20 }, fixedOrigin: 'Vecchiano (PI)' }
+  TRN: { code: 'TRN', name: 'Torino Caselle',        lat: 45.2008, lng: 7.6496,  mode: 'train' },
+  LIN: { code: 'LIN', name: 'Milano Linate',         lat: 45.4451, lng: 9.2767,  mode: 'car' },
+  MXP: { code: 'MXP', name: 'Milano Malpensa',       lat: 45.6306, lng: 8.7281,  mode: 'car' },
+  BGY: { code: 'BGY', name: 'Bergamo Orio al Serio', lat: 45.6739, lng: 9.7042,  mode: 'car' },
+  PSA: { code: 'PSA', name: 'Pisa Galilei',          lat: 43.6839, lng: 10.3927, mode: 'lift', fixedOrigin: 'Vecchiano (PI)' }
 };
+// Distanze, minuti e pedaggi solo andata. Si cambiano qui, non dal sito (il consumo e il prezzo della benzina sì).
+const ARRIVE_BEFORE = 150;     // minuti prima del decollo in aeroporto
+const RETURN_BUFFER = 45;      // minuti dall'atterraggio in Italia a quando si è pronti per tornare a casa
+const STATION_BUFFER = 10;     // minuti per lasciare l'auto a Venaria e arrivare al binario
+const VENARIA = { Aosta: { km: 114, min: 70, toll: 17.2 }, Torino: { km: 10, min: 30, toll: 0 } };
+const CAR = {
+  Aosta:  { LIN: { km: 203, min: 150, toll: 29.5 }, MXP: { km: 168, min: 120, toll: 22.4 }, BGY: { km: 299, min: 150, toll: 30.6 } },
+  Torino: { LIN: { km: 161, min: 120, toll: 22.1 }, MXP: { km: 126, min: 105, toll: 15 },   BGY: { km: 188, min: 135, toll: 23.2 } }
+};
+const PISA_MIN = 30;           // Vecchiano → Pisa Galilei, minuti
+const TRAIN_FARE = 2;          // € a tratta, a persona, Venaria Reale → Caselle aeroporto
+
+// Orari SFM4/SFM7 (valido dal 20 gennaio 2024: da riverificare sul sito SFM o Trenitalia prima di partire).
+// F = giorni feriali lun-sab, S = solo sabato, H = festivi. Solo le corse che fermano a Venaria Reale Reggia.
+const SFM = {
+  outMin: 15, backMin: 14,
+  out: {   // partenze da Venaria Reale Reggia verso Torino Aeroporto di Caselle
+    F: ['05:42','06:12','06:42','07:12','07:42','08:12','08:42','09:12','09:42','12:12','12:42','13:12','13:42','14:12','14:42','15:12','15:42','16:12','16:42','17:12','17:42','18:12','18:42','19:12','19:42','20:12','20:42','21:42'],
+    S: ['10:42','11:42'],
+    H: ['05:42','06:12','06:42','07:42','08:42','09:42','10:42','11:42','12:42','13:42','14:42','15:42','16:42','17:42','18:42','19:42','20:42','21:42']
+  },
+  back: {  // partenze da Torino Aeroporto di Caselle verso Venaria Reale Reggia
+    F: ['06:00','07:00','07:30','08:00','08:30','09:00','09:30','10:00','12:30','13:00','13:30','14:00','14:30','15:00','15:30','16:00','16:30','17:00','17:30','18:00','18:30','19:00','19:30','20:00','20:30','21:00','21:30','22:00'],
+    S: ['11:00','12:00'],
+    H: ['07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00','18:00','19:00','20:00','21:00','21:30','22:00']
+  }
+};
+function easterSunday(y) {
+  const a = y % 19, b = Math.floor(y / 100), c = y % 100, d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3),
+    h = (19 * a + b - d - g + 15) % 30, i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451),
+    month = Math.floor((h + l - 7 * m + 114) / 31), day = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(y, month - 1, day);
+}
+function dayKind(date) {       // W lun-ven, S sabato, H domenica o festivo
+  if (!date) return 'W';
+  const dow = date.getDay(), md = (date.getMonth() + 1) + '-' + date.getDate();
+  const fixed = ['1-1', '1-6', '4-25', '5-1', '6-2', '8-15', '11-1', '12-8', '12-25', '12-26'];
+  const e = easterSunday(date.getFullYear()), pasq = new Date(e.getFullYear(), e.getMonth(), e.getDate() + 1);
+  if (dow === 0 || fixed.includes(md) || (date.getMonth() === pasq.getMonth() && date.getDate() === pasq.getDate())) return 'H';
+  return dow === 6 ? 'S' : 'W';
+}
+const sfmTimes = (dir, kind) => (kind === 'H' ? SFM[dir].H : kind === 'S' ? SFM[dir].F.concat(SFM[dir].S) : SFM[dir].F).map(toMin).sort((a, b) => a - b);
+const startDate = D => { if (!D.S.start) return null; const [y, m, d] = D.S.start.split('-').map(Number); return new Date(y, m - 1, d); };
+
+// Piano del trasferimento di andata: a che ora si parte e quando si arriva in aeroporto.
+function outboundPlan(D) {
+  const ap = D.ap; if (!ap) return null;
+  const dep = toMin(D.f.out), target = dep - ARRIVE_BEFORE;
+  if (ap.mode === 'lift') return { mode: 'lift', found: true, homeDep: target - PISA_MIN, arrAirport: target, groundMin: PISA_MIN };
+  if (ap.mode === 'car') { const c = CAR[D.originKey][ap.code]; return { mode: 'car', found: true, homeDep: target - c.min, arrAirport: target, groundMin: c.min, km: c.km, toll: c.toll }; }
+  const v = VENARIA[D.originKey], times = sfmTimes('out', dayKind(startDate(D)));
+  const t = times.filter(x => x + SFM.outMin <= target).pop();
+  if (t == null) return { mode: 'train', found: false, homeDep: null, arrAirport: target, groundMin: null, km: v.km, toll: v.toll };
+  const homeDep = t - STATION_BUFFER - v.min;
+  return { mode: 'train', found: true, trainDep: t, trainArr: t + SFM.outMin, homeDep, arrAirport: t + SFM.outMin, groundMin: t + SFM.outMin - homeDep, km: v.km, toll: v.toll };
+}
+function returnPlan(D, date) {
+  const arr = toMin(D.f.intlArr) + RETURN_BUFFER;
+  const t = sfmTimes('back', dayKind(date)).find(x => x >= arr);
+  return t == null ? { found: false } : { found: true, trainDep: t, trainArr: t + SFM.backMin };
+}
+// Ore di sosta dell'auto in aeroporto e giorni fatturati (scatta il giorno dopo alle 24 ore).
+function parkNeed(S0, D, days) {
+  const f = D.f, n = days.length;
+  const parkAbs = toMin(f.out) - ARRIVE_BEFORE;
+  const pickAbs = (n - 1) * 1440 + (+f.intlOff || 0) * 1440 + toMin(f.intlArr) + RETURN_BUFFER;
+  const H = (pickAbs - parkAbs) / 60, n0 = Math.floor(H / 24);
+  return { H, n0, charged: H % 24 === 0 ? n0 : n0 + 1 };
+}
+function parkPrice(S0, code, n) {
+  const m = (S0.parking && S0.parking[code]) || {};
+  const pts = Object.entries(m).map(([k, v]) => [+k, +v]).filter(([k, v]) => !isNaN(k) && !isNaN(v) && v >= 0).sort((a, b) => a[0] - b[0]);
+  if (!pts.length) return null;
+  const exact = pts.find(p => p[0] === n);
+  if (exact) return { v: exact[1], est: false };
+  if (pts.length === 1) return { v: pts[0][1] * n / pts[0][0], est: true };
+  const near = pts.slice().sort((a, b) => Math.abs(a[0] - n) - Math.abs(b[0] - n)).slice(0, 2).sort((a, b) => a[0] - b[0]);
+  return { v: Math.max(0, near[0][1] + (near[1][1] - near[0][1]) * (n - near[0][0]) / (near[1][0] - near[0][0])), est: true };
+}
+// Costi del trasferimento in aeroporto, che dipendono dal volo scelto.
+function groundCosts(S0, D, days) {
+  const ap = D.ap;
+  if (!ap) return [{ id: 'trasf_nd', label: 'Trasferimento e parcheggio in aeroporto (dipendono dal volo scelto)', eur: 0, scope: 'sh', cat: 'Trasporti', tbd: true }];
+  if (ap.mode === 'lift') return [{ id: 'trasf_pisa', label: 'Trasferimento a Pisa: ti accompagnano, nessun costo', eur: 0, scope: 'sh', cat: 'Trasporti' }];
+  const fu = S0.fuel || { price: 1.99, cons: 7 };
+  const leg = ap.mode === 'train' ? VENARIA[D.originKey] : CAR[D.originKey][ap.code];
+  const dest = ap.mode === 'train' ? 'Venaria Reale' : ap.name;
+  const out = [{ id: 'trasf_carb', label: `Carburante ${D.originName} ⇄ ${dest}: ${leg.km * 2} km, ${fu.cons} L/100 km a ${fu.price} €/L`, eur: leg.km * 2 * fu.cons / 100 * fu.price, scope: 'sh', cat: 'Trasporti' }];
+  if (leg.toll > 0) out.push({ id: 'trasf_pedaggi', label: `Pedaggi ${D.originName} ⇄ ${dest}, andata e ritorno`, eur: leg.toll * 2, scope: 'sh', cat: 'Trasporti' });
+  if (ap.mode === 'train') {
+    out.push({ id: 'trasf_treno', label: 'Treno Venaria Reale → Torino Aeroporto di Caselle, andata e ritorno', eur: TRAIN_FARE * 2, scope: 'pp', cat: 'Trasporti' });
+  } else {
+    const need = parkNeed(S0, D, days), pr = parkPrice(S0, ap.code, need.charged);
+    out.push({ id: 'parcheggio', label: `Parcheggio ${ap.name}, ${need.charged} giorni`, eur: pr ? pr.v : 0, scope: 'sh', cat: 'Trasporti', tbd: !pr, est: !!(pr && pr.est),
+      book: { site: 'Sito dell’aeroporto', url: '', rec: 60, open: 'Molti aeroporti permettono di prenotare il parcheggio online: controlla sul sito dell’aeroporto.' } });
+  }
+  return out;
+}
+// Ultime voci del ritorno in Italia, aggiunte al programma dopo l'arrivo.
+function addHomeLeg(d, D) {
+  if (!D.ap) return;
+  const date = d.date ? new Date(d.date.getFullYear(), d.date.getMonth(), d.date.getDate() + (+D.f.intlOff || 0)) : null;
+  const ap = D.ap, extra = [];
+  if (ap.mode === 'train') {
+    const rp = returnPlan(D, date);
+    if (rp.found) extra.push(it('rtrain', fmt(rp.trainDep), `Treno da Torino Aeroporto di Caselle a Venaria Reale Reggia (arrivo ${fmt(rp.trainArr)})`, 'move'), it('rcar', '', `Auto a Venaria e rientro a ${D.originName}`, 'move'));
+    else extra.push(it('rcar', '', 'Nessun treno utile dopo l’arrivo: da organizzare (taxi o passaggio)', 'move'));
+  } else if (ap.mode === 'lift') extra.push(it('rcar', '', 'Ti vengono a prendere all’aeroporto di Pisa e rientro a Vecchiano', 'move'));
+  else extra.push(it('rcar', '', `Ritiro bagagli, auto nel parcheggio e rientro a ${D.originName}`, 'move'));
+  const i = d.items.findIndex(x => x.id === 'arr');
+  d.items.splice(i < 0 ? d.items.length : i + 1, 0, ...extra);
+}
 
 const SITES = {
   cruz:  { name: 'Cruz del Sur',  url: 'https://www.cruzdelsur.com.pe' },
@@ -83,8 +194,6 @@ function GENERAL(D) {
       book: { site: 'Sito della compagnia aerea', url: '', rec: 150,
               open: 'Le compagnie aprono le vendite circa 11 mesi prima (indicativo): controlla sul sito della compagnia.' } },
     { id: 'esim', label: 'eSIM Saily 10 GB', eur: 26.49, scope: 'pp', cat: 'Altro' },
-    { id: 'parcheggio', label: 'Parcheggio in aeroporto', eur: 0, scope: 'sh', cat: 'Trasporti', tbd: true,
-      book: { site: 'Sito dell’aeroporto', url: '', rec: 60, open: 'Molti aeroporti permettono di prenotare il parcheggio online: controlla sul sito dell’aeroporto di partenza.' } },
     { id: 'extra', label: 'Extra e imprevisti', eur: 100, scope: 'pp', cat: 'Altro' }
   ];
 }
@@ -104,14 +213,25 @@ const BLOCKS = [
         items: [it('fly', '', 'Volo per Lima: aeroporto e orari da definire nella sezione Voli', 'move'), it('night', '', 'Notte in volo', 'sleep')],
         costs: [], legs: [leg(homeAp(D), 'Aeroporto di Lima (LIM)', 'plane', 'da definire', { far: true })], stops: []
       };
-      const f = D.f, ap = D.ap, dep = toMin(f.out), arr = dep - 180, home = arr - D.drive;
+      const f = D.f, ap = D.ap, dep = toMin(f.out), plan = outboundPlan(D);
       const same = f.dayOff === 0;
       const la = f.layArr ? toMin(f.layArr) : null, ld = f.layDep ? toMin(f.layDep) : null;
       const layGap = la != null && ld != null ? ((ld - la) + 1440) % 1440 : null;
       const layTxt = layGap != null ? ` (scalo di ${Math.floor(layGap / 60)} h ${String(layGap % 60).padStart(2, '0')})` : '';
       const items = [
-        it('home', fmt(home), `Partenza da ${D.originName} verso ${ap.name} (${ap.code})`, 'move'),
-        it('apt', fmt(arr), `Arrivo in aeroporto a ${ap.name}: check-in e consegna bagagli`, 'move'),
+        ...(plan.mode === 'train'
+          ? (plan.found
+            ? [it('home', fmt(plan.homeDep), `Partenza da ${D.originName} in auto verso Venaria Reale`, 'move'),
+               it('venaria', fmt(plan.trainDep - STATION_BUFFER), 'Arrivo a Venaria Reale: auto lasciata gratis, a piedi alla stazione Venaria Reale Reggia', 'move'),
+               it('train', fmt(plan.trainDep), 'Treno da Venaria Reale Reggia a Torino Aeroporto di Caselle', 'move'),
+               it('apt', fmt(plan.trainArr), `Arrivo in aeroporto a ${ap.name}: check-in e consegna bagagli`, 'move')]
+            : [it('home', '', `Partenza da ${D.originName}: nessun treno abbastanza presto per questo volo, da organizzare (taxi o auto fino a Caselle)`, 'move'),
+               it('apt', fmt(plan.arrAirport), `Arrivo in aeroporto a ${ap.name}: check-in e consegna bagagli`, 'move')])
+          : plan.mode === 'lift'
+            ? [it('home', fmt(plan.homeDep), `Partenza da Vecchiano verso ${ap.name} (ti accompagnano)`, 'move'),
+               it('apt', fmt(plan.arrAirport), `Arrivo in aeroporto a ${ap.name}: check-in e consegna bagagli`, 'move')]
+            : [it('home', fmt(plan.homeDep), `Partenza da ${D.originName} in auto verso ${ap.name} (${ap.code})`, 'move'),
+               it('apt', fmt(plan.arrAirport), `Arrivo in aeroporto a ${ap.name}: parcheggio, check-in e consegna bagagli`, 'move')]),
         it('fly', f.out, `Decollo ${ap.code} → ${f.layover || 'Lima (LIM)'}`, 'move'),
         f.layover ? it('layArr', f.layArr, `Arrivo a ${f.layover} per lo scalo${layTxt}`, 'move') : null,
         f.layover ? it('layDep', f.layDep, `Decollo ${f.layover} → Lima (LIM)${la != null && ld != null && ld < la ? ' (giorno dopo)' : ''}`, 'move') : null
@@ -130,7 +250,7 @@ const BLOCKS = [
         title: same ? 'Partenza e arrivo a Lima' : 'Partenza dall’Italia',
         short: 'Volo', place: same ? 'Lima' : 'In volo', alt: same ? 150 : null, ll: [-12.0464, -77.0428],
         desc: [
-          `Si parte da ${D.originName} verso ${ap.name}. ${same ? 'Il volo atterra a Lima in serata, quindi la prima notte è a Lima.' : 'Il volo è di notte: si arriva a Lima la mattina dopo.'} Lima è 7 ore indietro rispetto all’Italia con l’ora legale (6 con l’ora solare).`,
+          `Si parte da ${D.originName} verso ${ap.name}${plan.mode === 'train' ? ': l’auto resta gratis a Venaria Reale e da lì si prende il treno urbano (orari SFM del 2024, da riverificare)' : ''}. In aeroporto si arriva 2 ore e 30 prima del decollo. ${same ? 'Il volo atterra a Lima in serata, quindi la prima notte è a Lima.' : 'Il volo è di notte: si arriva a Lima la mattina dopo.'} Lima è 7 ore indietro rispetto all’Italia con l’ora legale (6 con l’ora solare).`,
           'Consiglio: tieni nel bagaglio a mano documenti, una giacca e una scorta di contanti in euro per il primo cambio.'
         ],
         items, costs,
@@ -629,6 +749,7 @@ const BLOCKS = [
 
   { id: 'rientro', region: 'viaggio',
     show: D => D.limaEnd,
+    post: addHomeLeg,
     make: D => {
       const f = D.f;
       return {
@@ -650,6 +771,7 @@ const BLOCKS = [
 
   { id: 'rientro_diretto', region: 'viaggio',
     show: D => !D.limaEnd,
+    post: addHomeLeg,
     make: D => {
       const f = D.f;
       return {
