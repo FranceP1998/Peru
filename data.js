@@ -20,12 +20,19 @@ const REGIONS = {
   cusco:    { name: 'Cusco e Valle Sacra',  color: '#3F7F5B' }
 };
 
+// Origini di partenza. Per Pisa si parte sempre da Vecchiano.
+const ORIGINS = {
+  Aosta:  { name: 'Aosta' },
+  Torino: { name: 'Torino (Via Timavo 6)' }
+};
+// Minuti in auto dall'origine all'aeroporto. Valori approssimativi da controllare con Google Maps:
+// si cambiano solo qui, non dal sito.
 const AIRPORTS = {
-  TRN: { code: 'TRN', name: 'Torino Caselle',        home: 'Aosta',          lat: 45.2008, lng: 7.6496, drive: 80,  est: true },
-  LIN: { code: 'LIN', name: 'Milano Linate',         home: 'Aosta',          lat: 45.4451, lng: 9.2767, drive: 120, est: false },
-  MXP: { code: 'MXP', name: 'Milano Malpensa',       home: 'Aosta',          lat: 45.6306, lng: 8.7281, drive: 110, est: true },
-  BGY: { code: 'BGY', name: 'Bergamo Orio al Serio', home: 'Aosta',          lat: 45.6739, lng: 9.7042, drive: 140, est: true },
-  PSA: { code: 'PSA', name: 'Pisa Galilei',          home: 'Vecchiano (PI)', lat: 43.6839, lng: 10.3927, drive: 20,  est: true }
+  TRN: { code: 'TRN', name: 'Torino Caselle',        lat: 45.2008, lng: 7.6496, from: { Aosta: 80,  Torino: 25 } },
+  LIN: { code: 'LIN', name: 'Milano Linate',         lat: 45.4451, lng: 9.2767, from: { Aosta: 120, Torino: 105 } },
+  MXP: { code: 'MXP', name: 'Milano Malpensa',       lat: 45.6306, lng: 8.7281, from: { Aosta: 110, Torino: 85 } },
+  BGY: { code: 'BGY', name: 'Bergamo Orio al Serio', lat: 45.6739, lng: 9.7042, from: { Aosta: 140, Torino: 125 } },
+  PSA: { code: 'PSA', name: 'Pisa Galilei',          lat: 43.6839, lng: 10.3927, from: { 'Vecchiano (PI)': 20 }, fixedOrigin: 'Vecchiano (PI)' }
 };
 
 const SITES = {
@@ -66,7 +73,7 @@ const PLACE = {
 };
 // m: plane | car | bus | train | boat | foot. night: tragitto di notte. via: tappe intermedie lungo la strada. far: non disegnare (volo intercontinentale)
 const leg = (a, b, m, t, o = {}) => ({ a, b, m, t, ...o });
-const MODES = { plane: ['✈️', 'Aereo'], car: ['🚗', 'Auto o taxi'], bus: ['🚌', 'Bus'], train: ['🚆', 'Treno'], boat: ['⛵', 'Barca'], foot: ['🥾', 'A piedi'] };
+const MODES = { plane: 'Aereo', car: 'Auto o taxi', bus: 'Bus', train: 'Treno', boat: 'Barca', foot: 'A piedi' };
 
 /* ---- Voci di costo generali (non legate a un giorno) ---- */
 function GENERAL(D) {
@@ -75,6 +82,8 @@ function GENERAL(D) {
       book: { site: 'Sito della compagnia aerea', url: '', rec: 150,
               open: 'Le compagnie aprono le vendite circa 11 mesi prima (indicativo): controlla sul sito della compagnia.' } },
     { id: 'esim', label: 'eSIM Saily 10 GB', eur: 26.49, scope: 'pp', cat: 'Altro' },
+    { id: 'parcheggio', label: 'Parcheggio in aeroporto', eur: 0, scope: 'sh', cat: 'Trasporti', tbd: true,
+      book: { site: 'Sito dell’aeroporto', url: '', rec: 60, open: 'Molti aeroporti permettono di prenotare il parcheggio online: controlla sul sito dell’aeroporto di partenza.' } },
     { id: 'extra', label: 'Extra e imprevisti', eur: 100, scope: 'pp', cat: 'Altro' }
   ];
 }
@@ -89,11 +98,15 @@ const BLOCKS = [
     make: D => {
       const f = D.f, ap = D.ap, dep = toMin(f.out), arr = dep - 180, home = arr - D.drive;
       const same = f.dayOff === 0;
+      const la = f.layArr ? toMin(f.layArr) : null, ld = f.layDep ? toMin(f.layDep) : null;
+      const layGap = la != null && ld != null ? ((ld - la) + 1440) % 1440 : null;
+      const layTxt = layGap != null ? ` (scalo di ${Math.floor(layGap / 60)} h ${String(layGap % 60).padStart(2, '0')})` : '';
       const items = [
-        it('home', fmt(home), `Partenza da ${ap.home} verso ${ap.name} (${ap.code})`, 'move'),
+        it('home', fmt(home), `Partenza da ${D.originName} verso ${ap.name} (${ap.code})`, 'move'),
         it('apt', fmt(arr), `Arrivo in aeroporto a ${ap.name}: check-in e consegna bagagli`, 'move'),
         it('fly', f.out, `Decollo ${ap.code} → ${f.layover || 'Lima (LIM)'}`, 'move'),
-        f.layover ? it('lay', '', `Scalo a ${f.layover} e coincidenza per Lima`, 'move') : null
+        f.layover ? it('layArr', f.layArr, `Arrivo a ${f.layover} per lo scalo${layTxt}`, 'move') : null,
+        f.layover ? it('layDep', f.layDep, `Decollo ${f.layover} → Lima (LIM)${la != null && ld != null && ld < la ? ' (giorno dopo)' : ''}`, 'move') : null
       ];
       const costs = [];
       if (same) {
@@ -109,7 +122,7 @@ const BLOCKS = [
         title: same ? 'Partenza e arrivo a Lima' : 'Partenza dall’Italia',
         short: 'Volo', place: same ? 'Lima' : 'In volo', alt: same ? 150 : null, ll: [-12.0464, -77.0428],
         desc: [
-          `Si parte da ${ap.home} verso ${ap.name}. ${same ? 'Il volo atterra a Lima in serata, quindi la prima notte è a Lima.' : 'Il volo è di notte: si arriva a Lima la mattina dopo.'} Lima è 7 ore indietro rispetto all’Italia con l’ora legale (6 con l’ora solare).`,
+          `Si parte da ${D.originName} verso ${ap.name}. ${same ? 'Il volo atterra a Lima in serata, quindi la prima notte è a Lima.' : 'Il volo è di notte: si arriva a Lima la mattina dopo.'} Lima è 7 ore indietro rispetto all’Italia con l’ora legale (6 con l’ora solare).`,
           'Consiglio: tieni nel bagaglio a mano documenti, una giacca e una scorta di contanti in euro per il primo cambio.'
         ],
         items, costs,
@@ -618,6 +631,7 @@ const BLOCKS = [
           it('free', '', 'Mattina libera a Lima o ultimi acquisti', 'tip'),
           it('apt', fmt(toMin(f.intlDep) - 180), 'Arrivo in aeroporto a Lima (LIM), 3 ore prima del volo', 'move'),
           it('fly', f.intlDep, 'Decollo da Lima verso l’Italia', 'move'),
+          f.retLayover ? it('rlay', f.retLayArr, `Scalo a ${f.retLayover}${f.retLayDep ? ` (ripartenza alle ${f.retLayDep})` : ''}`, 'move') : null,
           it('arr', f.intlArr, `Arrivo in Italia${f.intlOff ? ' (giorno dopo)' : ''}`, 'move')
         ],
         costs: [],
@@ -642,6 +656,7 @@ const BLOCKS = [
           it('fly', f.domDep, 'Volo Cusco → Lima', 'move'),
           it('land', f.domArr, 'Arrivo a Lima: ritiro bagagli e check-in per il volo internazionale', 'move'),
           it('fly2', f.intlDep, 'Decollo da Lima verso l’Italia', 'move'),
+          f.retLayover ? it('rlay', f.retLayArr, `Scalo a ${f.retLayover}${f.retLayDep ? ` (ripartenza alle ${f.retLayDep})` : ''}`, 'move') : null,
           it('arr', f.intlArr, `Arrivo in Italia${f.intlOff ? ' (giorno dopo)' : ''}`, 'move')
         ],
         costs: [

@@ -7,8 +7,8 @@
 
 const KEY = 'peru-trip-v1';
 const DEFAULT = {
-  v: 1, start: '', persons: 2, airport: 'LIN', drive: {},
-  fl: { out: '20:20', layover: 'Madrid', land: '06:30', dayOff: 1, buses: '10:30, 13:30',
+  v: 1, start: '', persons: 2, airport: 'LIN', origin: 'Aosta',
+  fl: { out: '20:20', layover: 'Madrid', layArr: '22:40', layDep: '01:45', retLayover: 'Madrid', retLayArr: '', retLayDep: '', land: '06:30', dayOff: 1, buses: '10:30, 13:30',
         domDep: '07:30', domArr: '09:00', intlDep: '23:30', intlArr: '18:30', intlOff: 1,
         bagsCabin: 1, bagsHold: 1 },
   cfg: { imm: 90, taxi: 90, comfort: 60 },
@@ -53,7 +53,9 @@ function setPath(o, path, v) { const p = path.split('.'); let t = o; for (let i 
 /* ---------- logica del viaggio ---------- */
 function derive(S0) {
   const f = S0.fl, c = S0.cfg, ap = AIRPORTS[S0.airport];
-  const drive = S0.drive && S0.drive[S0.airport] != null ? S0.drive[S0.airport] : ap.drive;
+  const originKey = ap.fixedOrigin || (S0.origin === 'Torino' ? 'Torino' : 'Aosta');
+  const originName = ap.fixedOrigin || ORIGINS[originKey].name;
+  const drive = ap.from[originKey];
   const buses = String(f.buses).split(',').map(s => s.trim()).filter(Boolean).map(toMin).sort((a, b) => a - b);
   const lastBus = buses.length ? buses[buses.length - 1] : toMin('13:30');
   const land = toMin(f.land), ready = land + c.imm + c.taxi;
@@ -65,7 +67,7 @@ function derive(S0) {
   const gap = toMin(f.intlDep) - toMin(f.domArr);
   const endRec = gap < 60 + 180 + c.comfort;
   const limaEnd = S0.lima.end === 'auto' ? endRec : S0.lima.end === 'yes';
-  return { S: S0, f, c, ap, drive, buses, lastBus, land, ready, bus, busUse, bus2, startRec, limaStart, gap, endRec, limaEnd, ex: S0.ex };
+  return { S: S0, f, c, ap, drive, originName, buses, lastBus, land, ready, bus, busUse, bus2, startRec, limaStart, gap, endRec, limaEnd, ex: S0.ex };
 }
 
 const allExtras = S0 => EXTRAS.concat((S0.custom || []).map(toExtra));
@@ -102,7 +104,6 @@ function buildDays(S0) {
     const d = b.make(D);
     d.id = b.id; d.region = b.region;
     d.items = d.items.filter(Boolean); d.costs = (d.costs || []).slice(); d.desc = (d.desc || []).slice();
-    d.costs.push({ id: 'pasti_' + b.id, label: 'Pasti (stima)', eur: MEAL_EUR, scope: 'pp', cat: 'Pasti' });
     out.push(d);
   }
   for (const e of allExtras(S0)) {
@@ -120,7 +121,7 @@ const nativeAmt = (S0, c) => { const o = S0.items[c.id] || {}; return o.amt != n
 const toEur = (S0, cur, a) => cur === 'PEN' ? a / S0.rate.pen : (cur === 'USD' ? a / S0.rate.usd : a);
 const unitEur = (S0, c) => toEur(S0, curOf(S0, c), nativeAmt(S0, c));
 const fmtNative = (S0, c) => { const cu = curOf(S0, c), a = nativeAmt(S0, c); return cu === 'PEN' ? solFmt(a) : (cu === 'USD' ? '$ ' + nfp.format(a) : eur2(a)); };
-const lineEst = (S0, c) => unitEur(S0, c) * (c.scope === 'pp' ? S0.persons : 1);
+const lineEst = (S0, c) => unitEur(S0, c) * (c.scope === 'pp' ? S0.persons : 1) * (c.mult || 1);
 const isPaid = (S0, c) => { const o = S0.items[c.id] || {}; return o.paid != null && o.paid !== ''; };
 const lineEur = (S0, c) => isPaid(S0, c) ? +S0.items[c.id].paid : lineEst(S0, c);
 
@@ -128,6 +129,7 @@ function allCosts(S0, days) {
   const L = [];
   GENERAL(derive(S0)).forEach(c => L.push({ ...c, day: null }));
   days.forEach(d => d.costs.forEach(c => L.push({ ...c, day: d })));
+  L.push({ ...MEAL_ITEM, label: 'Pasti (stima giornaliera)', cat: 'Pasti', perDay: true, mult: days.length, day: null });
   return L;
 }
 function totals(S0, days) {
@@ -137,7 +139,10 @@ function totals(S0, days) {
   for (const c of L) { const v = lineEur(S0, c); total += v; if (isPaid(S0, c)) paid += v; }
   return { days: days.length, nights: days.length - 1, total, perPerson: total / S0.persons, paid, left: total - paid, L };
 }
-const dayTotal = (S0, d) => d.costs.reduce((a, c) => a + lineEur(S0, c), 0);
+const MEAL_ITEM = { id: 'pasti', eur: MEAL_EUR, scope: 'pp' };
+const mealDay = S0 => unitEur(S0, MEAL_ITEM) * S0.persons;          // pasti di un giorno, per tutte le persone
+const dayTotal = (S0, d) => d.costs.reduce((a, c) => a + lineEur(S0, c), 0) + mealDay(S0);
+const scopeText = (S0, c) => (c.scope === 'pp' ? 'a testa' : 'in ' + S0.persons) + (c.perDay ? `, al giorno per ${c.mult} giorni` : '');
 
 /* Impatto di un'esperienza sul totale (a testa) e sulla durata */
 function impactOf(e, T0) {
@@ -330,7 +335,7 @@ function dayBody(d) {
     const paid = isPaid(S, c);
     const base = curOf(S, c) === 'EUR' ? eur2(nativeAmt(S, c)) : `${fmtNative(S, c)} ≈ ${eur2(unitEur(S, c))}`;
     return `<tr><td>${esc(c.label)}${c.est ? '<span class="esttag">stima</span>' : ''}${paid ? '<span class="paidtag">pagato</span>' : ''}<br><span class="small">${base} ${c.scope === 'pp' ? 'a testa' : 'in ' + S.persons}</span></td><td>${eur2(lineEur(S, c))}</td></tr>`;
-  }).join('');
+  }).join('') + `<tr><td>Pasti (stima)<br><span class="small">${eur2(unitEur(S, MEAL_ITEM))} a testa</span></td><td>${eur2(mealDay(S))}</td></tr>`;
   return `<div class="cols">
     <div class="desc">${d.desc.map(p => `<p>${esc(p)}</p>`).join('')}${banner}
       <h3 style="font-size:17px;margin:16px 0 4px">Costi del giorno</h3>
@@ -465,13 +470,13 @@ function costiTab() {
   <h3 style="margin:22px 0 4px">Per giornata</h3>
   <div class="tblwrap"><table class="tbl"><tr><th>Giorno</th><th>Cosa</th><th class="r">In ${S.persons}</th><th class="r">A testa</th></tr>
   ${days.map(d => `<tr><td>${d.n}${d.date ? ', ' + esc(fmtDate(d.date)) : ''}</td><td>${esc(d.title)}</td><td class="r">${eur0(dayTotal(S, d))}</td><td class="r">${eur0(dayTotal(S, d) / S.persons)}</td></tr>`).join('')}
-  <tr><td>–</td><td>Voci generali (voli, eSIM, extra)</td><td class="r">${eur0(L.filter(x => !x.day).reduce((a, x) => a + lineEur(S, x), 0))}</td><td class="r">${eur0(L.filter(x => !x.day).reduce((a, x) => a + lineEur(S, x), 0) / S.persons)}</td></tr>
+  <tr><td>–</td><td>Voci generali (voli, parcheggio, eSIM, extra)</td><td class="r">${eur0(L.filter(x => !x.day && !x.perDay).reduce((a, x) => a + lineEur(S, x), 0))}</td><td class="r">${eur0(L.filter(x => !x.day && !x.perDay).reduce((a, x) => a + lineEur(S, x), 0) / S.persons)}</td></tr>
   <tr class="sum"><td></td><td>Totale</td><td class="r">${eur0(T.total)}</td><td class="r">${eur0(T.perPerson)}</td></tr></table></div>
 
   <h3 style="margin:22px 0 4px">Tutte le voci</h3>
   <p class="small">Scegli la valuta di ogni voce (euro, soles o dollari) e scrivi l’importo: cambiando valuta il numero resta uguale, correggilo se serve. In “Pagato” metti il totale in euro realmente pagato per quella voce, per tutte le persone.</p>
   <div class="tblwrap"><table class="tbl"><tr><th>Voce</th><th>Giorno</th><th class="r">Importo</th><th class="r">Stima in euro</th><th class="r">Pagato in euro</th></tr>
-  ${L.map(c => { const o = S.items[c.id] || {}; return `<tr class="${isPaid(S, c) ? 'paid' : ''}"><td>${esc(c.label)}${c.est ? '<span class="esttag">stima</span>' : ''}<br><span class="small">${c.scope === 'pp' ? 'a testa' : 'in ' + S.persons}</span></td><td>${c.day ? c.day.n : '–'}</td>
+  ${L.map(c => { const o = S.items[c.id] || {}; return `<tr class="${isPaid(S, c) ? 'paid' : ''}"><td>${esc(c.label)}${c.est ? '<span class="esttag">stima</span>' : ''}${c.tbd && nativeAmt(S, c) === 0 ? '<span class="esttag">da stabilire</span>' : ''}<br><span class="small">${scopeText(S, c)}</span></td><td>${c.day ? c.day.n : (c.perDay ? 'tutti' : '–')}</td>
     <td class="r"><select data-item="${c.id}" data-field="cur" aria-label="Valuta">${['EUR', 'PEN', 'USD'].map(v => `<option value="${v}" ${curOf(S, c) === v ? 'selected' : ''}>${v === 'EUR' ? '€' : (v === 'PEN' ? 'S/' : '$')}</option>`).join('')}</select> <input class="num" type="text" inputmode="decimal" data-item="${c.id}" data-field="amt" value="${nativeAmt(S, c)}"></td>
     <td class="r">${eur2(lineEst(S, c))}</td>
     <td class="r">€ <input class="num" type="text" inputmode="decimal" data-item="${c.id}" data-field="paid" value="${o.paid != null ? o.paid : ''}" placeholder="–"></td></tr>`; }).join('')}
@@ -499,7 +504,7 @@ function prenTab() {
   <p class="lead">Tutto ciò che si può riservare in anticipo, con il sito ufficiale dove farlo. La colonna “Consigliato” si calcola dalla data di partenza. La data di apertura delle vendite non la so con certezza per ogni servizio e cambia negli anni: quando la trovi sul sito, scrivila e il promemoria si aggiorna.</p>
   <div class="tblwrap"><table class="tbl"><tr><th>Cosa</th><th>Quando serve</th><th>Dove prenotare</th><th>Si apre il</th><th>Consigliato</th><th>Stato</th><th class="r">Pagato in euro</th></tr>
   ${rows.map(r => { const b = r.c.book, o = r.o; const url = o.url || b.url;
-    return `<tr class="${r.booked ? 'paid' : ''}"><td><b>${esc(r.c.label)}</b>${r.c.est ? '<span class="esttag">stima</span>' : ''}<br><span class="small">${esc(b.open || '')}</span></td>
+    return `<tr class="${r.booked ? 'paid' : ''}"><td><b>${esc(r.c.label)}</b>${r.c.est ? '<span class="esttag">stima</span>' : ''}${r.c.tbd && nativeAmt(S, r.c) === 0 ? '<span class="esttag">da stabilire</span>' : ''}<br><span class="small">${esc(b.open || '')}</span></td>
     <td>${r.c.day ? 'Giorno ' + r.c.day.n + (r.date ? '<br>' + esc(fmtDate(r.date)) : '') : 'Prima di partire' + (r.date ? '<br>' + esc(fmtDate(r.date)) : '')}</td>
     <td>${url ? `<a class="btn sm ghost" href="${esc(url)}" target="_blank" rel="noopener">${esc(b.site)}</a>` : esc(b.site)}${b.url2 ? `<br><a class="small" href="${esc(b.url2)}" target="_blank" rel="noopener">Turismo Mer</a>` : ''}
       ${url ? '' : `<br><input type="text" style="width:150px;margin-top:4px" data-item="${r.c.id}" data-field="url" placeholder="Incolla il link" value="${esc(o.url || '')}">`}</td>
@@ -545,9 +550,11 @@ function voliTab() {
   <p class="lead">I voli si prenotano sempre dal sito della compagnia, mai da intermediari. Google Voli e Skyscanner qui servono solo per scoprire quali compagnie e orari esistono: poi si va al sito ufficiale.</p>
   <div class="grid2">
     <div class="panel"><h3>Dove si parte</h3>
-      <p>${esc(ap.home)} verso ${esc(ap.name)} (${ap.code}). Tempo di viaggio per l’aeroporto in minuti:</p>
-      <table class="mini">${Object.values(AIRPORTS).map(a => `<tr><td>${esc(a.name)} (${a.code}) da ${esc(a.home)}${a.est ? '<span class="esttag">stima</span>' : ''}</td><td><input class="num" style="width:70px" type="text" inputmode="numeric" data-bind="drive.${a.code}" data-type="int" value="${S.drive[a.code] != null ? S.drive[a.code] : a.drive}"></td></tr>`).join('')}</table>
-      <p class="small">Si arriva in aeroporto 3 ore prima del decollo. Con Pisa si parte da Vecchiano, con gli altri aeroporti da Aosta.</p></div>
+      <label class="small">Partenza da<br><select data-bind="origin" ${ap.fixedOrigin ? 'disabled' : ''}>${ap.fixedOrigin
+        ? `<option>${esc(ap.fixedOrigin)}</option>`
+        : Object.entries(ORIGINS).map(([k, o]) => `<option value="${k}" ${D.originName === o.name ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label>
+      <p>${esc(D.originName)} verso ${esc(ap.name)} (${ap.code}).</p>
+      <p class="small">Si arriva in aeroporto 3 ore prima del decollo. Con Pisa si parte sempre da Vecchiano.</p></div>
     <div class="panel"><h3>Bagagli per persona</h3>
       <div class="inl"><label class="small">A mano<br><select data-bind="fl.bagsCabin" data-type="int">${[0, 1, 2].map(n => `<option ${f.bagsCabin === n ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
       <label class="small">In stiva<br><select data-bind="fl.bagsHold" data-type="int">${[0, 1, 2].map(n => `<option ${f.bagsHold === n ? 'selected' : ''}>${n}</option>`).join('')}</select></label></div>
@@ -558,7 +565,7 @@ function voliTab() {
   <h3 style="margin:24px 0 6px">Orari che guidano il programma</h3>
   <p class="small">Scrivi gli orari dei voli scelti: il programma del primo e dell’ultimo giorno si ricalcola e il sito decide se serve una notte a Lima.</p>
   <div class="inl" style="gap:18px">
-    ${inp('fl.out', `Decollo da ${ap.code}`)}${inp('fl.layover', 'Scalo (città)', 'text')}${inp('fl.land', 'Atterraggio a Lima')}
+    ${inp('fl.out', `Decollo da ${ap.code}`)}${inp('fl.layover', 'Scalo (città)', 'text')}${inp('fl.layArr', 'Arrivo allo scalo')}${inp('fl.layDep', 'Ripartenza dallo scalo')}${inp('fl.land', 'Atterraggio a Lima')}
     <label class="small">Arrivo a Lima<br><select data-bind="fl.dayOff" data-type="int"><option value="1" ${f.dayOff === 1 ? 'selected' : ''}>il giorno dopo</option><option value="0" ${f.dayOff === 0 ? 'selected' : ''}>lo stesso giorno</option></select></label>
   </div>
   <div class="inl" style="gap:18px;margin-top:12px">
@@ -572,12 +579,36 @@ function voliTab() {
     ${inp('fl.domDep', 'Volo Cusco → Lima: decollo')}${inp('fl.domArr', 'Volo Cusco → Lima: atterraggio')}${inp('fl.intlDep', 'Volo Lima → Italia: decollo')}${inp('fl.intlArr', 'Arrivo in Italia')}
     <label class="small">Arrivo in Italia<br><select data-bind="fl.intlOff" data-type="int"><option value="1" ${f.intlOff === 1 ? 'selected' : ''}>il giorno dopo</option><option value="0" ${f.intlOff === 0 ? 'selected' : ''}>lo stesso giorno</option></select></label>
   </div>
+  <div class="inl" style="gap:18px;margin-top:12px">${inp('fl.retLayover', 'Scalo al ritorno (città)', 'text')}${inp('fl.retLayArr', 'Arrivo allo scalo')}${inp('fl.retLayDep', 'Ripartenza dallo scalo')}</div>
   <p class="small"><b>${esc(endMsg(D))}</b></p>`;
 }
 
 /* ----- tab: mappa e tempi ----- */
+
+/* ---------- icone dei mezzi (SVG, tratto sottile, colore ereditato) ---------- */
+const ICONS = {
+  plane: '<path d="M12 3c.8 0 1.5.9 1.5 2v5l8 4.5v2l-8-2.2v4l2.2 1.7v1.5L12 20.5l-3.7 1V20l2.2-1.7v-4l-8 2.2v-2l8-4.5V5c0-1.1.7-2 1.5-2z"/>',
+  car: '<path d="M3.5 16.5v-3.8c0-.5.1-1 .3-1.4l1.8-3.7c.3-.6.9-1 1.6-1h9.6c.7 0 1.3.4 1.6 1l1.8 3.7c.2.4.3.9.3 1.4v3.8"/><path d="M3.5 16.5h2M9.5 16.5h5M18.5 16.5h2M4 11.2h16"/><circle cx="7.5" cy="16.5" r="2"/><circle cx="16.5" cy="16.5" r="2"/>',
+  bus: '<rect x="5" y="3.5" width="14" height="14" rx="2.5"/><path d="M5 12h14M7.5 17.5V20M16.5 17.5V20"/><circle cx="8.6" cy="14.8" r=".7" fill="currentColor"/><circle cx="15.4" cy="14.8" r=".7" fill="currentColor"/>',
+  train: '<rect x="6" y="3" width="12" height="14" rx="3.5"/><path d="M6 11h12M8 21l2.2-4M16 21l-2.2-4"/><circle cx="9.5" cy="14.2" r=".7" fill="currentColor"/><circle cx="14.5" cy="14.2" r=".7" fill="currentColor"/>',
+  boat: '<path d="M12 3v13.5M12 4.5 18 14.5h-6"/><path d="M3 17.5h18l-2.6 3.5H5.6z"/>',
+  foot: '<circle cx="13.5" cy="4.5" r="1.7"/><path d="M13 8.2l-3 2.4-.6 3.1M13 8.2l2.4 3.4 2.6.6M12.2 12.2l-1.6 3.6L8.5 20M12.8 12.6l2 3.2.6 4.2"/>',
+  moon: '<path d="M20 14.2A8 8 0 1 1 9.8 4a6.3 6.3 0 0 0 10.2 10.2z"/>'
+};
+const icon = (name, size = 18) => `<svg class="ico" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
+const MODE_STYLE = {
+  plane: { color: '#B83D6A', weight: 2.5, dashArray: '6 8' },
+  boat:  { color: '#1D7390', weight: 3.5, dashArray: '1 7', lineCap: 'round' },
+  train: { color: '#17272F', weight: 3, dashArray: '10 5 2 5' },
+  bus:   { color: '#1D7390', weight: 4, opacity: .85 },
+  car:   { color: '#17272F', weight: 3, opacity: .85 },
+  foot:  { color: '#586870', weight: 2 }
+};
+const lineSample = m => { const st = MODE_STYLE[m]; return `<svg width="38" height="8" viewBox="0 0 38 8" aria-hidden="true"><line x1="2" y1="4" x2="36" y2="4" stroke="${st.color}" stroke-width="${st.weight}" stroke-dasharray="${st.dashArray || ''}" stroke-linecap="${st.lineCap || 'butt'}"/></svg>`; };
+
 const resolvePt = x => typeof x === 'string' ? { n: x, ll: PLACE[x] } : x;
-const modeLabel = l => `${MODES[l.m][0]} ${MODES[l.m][1]}${l.night ? ' 🌙 di notte' : ''}`;
+const modeName = l => MODES[l.m] + (l.night ? ' (di notte)' : '');
+const modeHTML = l => `<span class="modecell" style="color:${MODE_STYLE[l.m].color}">${icon(l.m, 19)}${l.night ? icon('moon', 14) : ''}</span> ${esc(MODES[l.m])}${l.night ? ' di notte' : ''}`;
 function gmapsLink(l) {
   if (l.m === 'plane' || l.m === 'boat') return '';
   const a = resolvePt(l.a), b = resolvePt(l.b);
@@ -590,14 +621,14 @@ function mappaTab() {
   const legs = [];
   days.forEach(d => (d.legs || []).forEach(l => legs.push({ n: d.n, date: d.date, l })));
   const used = [...new Set(legs.map(x => x.l.m))];
-  const legend = used.map(m => `<span style="margin-right:16px;white-space:nowrap">${MODES[m][0]} ${MODES[m][1]}</span>`).join('') + (legs.some(x => x.l.night) ? '<span style="white-space:nowrap">🌙 di notte</span>' : '');
+  const legend = used.map(m => `<span class="lg" style="color:${MODE_STYLE[m].color}">${icon(m, 18)}<span style="color:var(--ink)">${MODES[m]}</span>${lineSample(m)}</span>`).join('') + (legs.some(x => x.l.night) ? `<span class="lg">${icon('moon', 16)}<span>di notte</span></span>` : '');
   return `<h2>Mappa e tempi di percorrenza</h2>
   <p class="lead">Le tappe nell’ordine in cui le percorri, con il mezzo di ogni spostamento. Le strade sono disegnate seguendo la rete stradale; per il percorso preciso apri il tragitto in Google Maps dalla tabella.</p>
   <p style="margin:0 0 6px">${legend}</p>
   <div id="map" role="img" aria-label="Mappa delle tappe del viaggio in Perù"></div>
-  <p class="small" id="mapnote"></p>
+  <p class="small" id="mapnote">Zoom con la rotella, il trackpad o il pizzico. Su telefono la mappa si sposta con due dita.</p>
   <div class="tblwrap"><table class="tbl"><tr><th>Giorno</th><th>Da</th><th>A</th><th>Come</th><th>Quanto</th><th>Strada</th></tr>
-  ${legs.map(x => { const a = resolvePt(x.l.a), b = resolvePt(x.l.b), g = gmapsLink(x.l); return `<tr><td>${x.n}</td><td>${esc(a.n)}</td><td>${esc(b.n)}</td><td>${modeLabel(x.l)}</td><td>${esc(x.l.t)}</td><td>${g ? `<a class="btn sm ghost" href="${esc(g)}" target="_blank" rel="noopener">Google Maps</a>` : '–'}</td></tr>`; }).join('')}</table></div>`;
+  ${legs.map(x => { const a = resolvePt(x.l.a), b = resolvePt(x.l.b), g = gmapsLink(x.l); return `<tr><td>${x.n}</td><td>${esc(a.n)}</td><td>${esc(b.n)}</td><td>${modeHTML(x.l)}</td><td>${esc(x.l.t)}</td><td>${g ? `<a class="btn sm ghost" href="${esc(g)}" target="_blank" rel="noopener">Google Maps</a>` : '–'}</td></tr>`; }).join('')}</table></div>`;
 }
 let MAP = null, MAPTOK = 0;
 const ROUTE_KEY = 'peru-routes-v1';
@@ -613,7 +644,8 @@ async function getRoute(coords) {
   return pts;
 }
 function modeIcon(l) {
-  return L.divIcon({ className: 'mk', iconSize: [34, 34], html: `<span class="mk-in">${MODES[l.m][0]}${l.night ? '<i>🌙</i>' : ''}</span>` });
+  const c = MODE_STYLE[l.m].color;
+  return L.divIcon({ className: 'mk', iconSize: [34, 34], html: `<span class="mk-in" style="color:${c};border-color:${c}">${icon(l.m, 17)}${l.night ? `<i>${icon('moon', 11)}</i>` : ''}</span>` });
 }
 async function initMap() {
   const el = document.getElementById('map');
@@ -621,7 +653,9 @@ async function initMap() {
   if (typeof L === 'undefined') { el.innerHTML = '<p style="padding:16px">La mappa non si è caricata: controlla la connessione e ricarica la pagina.</p>'; return; }
   if (MAP) { MAP.remove(); MAP = null; }
   const tok = ++MAPTOK;
-  MAP = L.map(el, { scrollWheelZoom: false });
+  const touch = !!(L.Browser && L.Browser.mobile);
+  // rotella, trackpad e pizzico per lo zoom; su telefono la mappa si sposta con due dita, così la pagina scorre normalmente
+  MAP = L.map(el, { scrollWheelZoom: true, touchZoom: true, doubleClickZoom: true, boxZoom: true, zoomControl: true, dragging: !touch, zoomSnap: 0.5 });
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 17, attribution: '&copy; OpenStreetMap' }).addTo(MAP);
   const bounds = [];
   CTX.days.forEach(d => {
@@ -636,11 +670,7 @@ async function initMap() {
     if (l.far) continue;
     const a = resolvePt(l.a), b = resolvePt(l.b);
     if (!a.ll || !b.ll || l.m === 'foot') continue;
-    let pts = [a.ll, b.ll], style, road = l.m === 'car' || l.m === 'bus';
-    if (l.m === 'plane') style = { color: '#B83D6A', weight: 2.5, dashArray: '6 8' };
-    else if (l.m === 'boat') style = { color: '#1D7390', weight: 3.5, dashArray: '1 7', lineCap: 'round' };
-    else if (l.m === 'train') style = { color: '#17272F', weight: 3, dashArray: '10 5 2 5' };
-    else style = l.m === 'bus' ? { color: '#1D7390', weight: 4, opacity: .85 } : { color: '#17272F', weight: 3, opacity: .85 };
+    let pts = [a.ll, b.ll], style = { ...MODE_STYLE[l.m] }, road = l.m === 'car' || l.m === 'bus';
     if (road) {
       try { pts = await getRoute([a.ll].concat((l.via || []).map(v => PLACE[v]), [b.ll])); }
       catch (e) { fails++; style = { color: '#8A969C', weight: 2.5, dashArray: '2 6' }; }
@@ -648,10 +678,10 @@ async function initMap() {
     }
     L.polyline(pts, style).addTo(MAP);
     const mid = pts[Math.floor(pts.length / 2)];
-    L.marker(mid, { icon: modeIcon(l) }).addTo(MAP).bindPopup(`<b>Giorno ${d.n}</b><br>${esc(a.n)} → ${esc(b.n)}<br>${esc(modeLabel(l))}, ${esc(l.t)}`);
+    L.marker(mid, { icon: modeIcon(l) }).addTo(MAP).bindPopup(`<b>Giorno ${d.n}</b><br>${esc(a.n)} → ${esc(b.n)}<br>${esc(modeName(l))}, ${esc(l.t)}`);
   }
   const note = document.getElementById('mapnote');
-  if (note && fails) note.textContent = 'Non sono riuscito a caricare alcune strade: le linee grigie puntinate sono tratti dritti. Riprova più tardi o usa i link a Google Maps.';
+  if (note && fails) note.textContent = 'Zoom con la rotella, il trackpad o il pizzico. Non sono riuscito a caricare alcune strade: le linee grigie puntinate sono tratti dritti. Riprova più tardi o usa i link a Google Maps.';
 }
 
 /* ----- tab: siti ufficiali ----- */
@@ -677,7 +707,7 @@ function footer() {
   <p style="margin:12px 0 0">Cambio da <a href="https://www.exchangerate-api.com" target="_blank" rel="noopener">ExchangeRate-API</a>. Mappa © OpenStreetMap.</p></div></footer>`;
 }
 function settingsHTML() {
-  const linked = !!(S.sync && S.sync.code);
+  const linked = !!(S.sync && S.sync.code) || !!(SB && SB.code);
   return `<h3 style="margin-bottom:10px">Impostazioni</h3>
     <p class="small">${linked ? 'Le modifiche si salvano da sole e compaiono su tutti i dispositivi collegati.' : 'Le modifiche si salvano da sole, ma solo su questo dispositivo. Per vederle anche su un altro, collegalo con un codice.'}</p>
     ${syncPanel()}
@@ -807,19 +837,20 @@ document.addEventListener('keydown', ev => {
 });
 
 
-/* ---------- salvataggio condiviso (Supabase) ---------- */
-const SB = (typeof SUPABASE_CONFIG !== 'undefined') ? SUPABASE_CONFIG : null;
+/* ---------- salvataggio condiviso (Google Drive, tramite uno script Apps Script) ---------- */
+const SB = (typeof DRIVE_SYNC !== 'undefined' && DRIVE_SYNC.url && DRIVE_SYNC.url.indexOf('https://') === 0) ? DRIVE_SYNC : null;
 let pushTimer = null, syncing = false;
 const canSync = () => !!(SB && S.sync && S.sync.code);
 const payload = () => { const p = clone(S); delete p.ui; delete p.sync; return p; };
-async function rpc(fn, body) {
-  const r = await fetch(`${SB.url}/rest/v1/rpc/${fn}`, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: SB.key }, body: JSON.stringify(body) });
+async function api(action, body) {
+  // Testo semplice: così il browser non fa la richiesta preliminare che gli script Google non gestiscono.
+  const r = await fetch(SB.url, { method: 'POST', body: JSON.stringify({ action, ...body }) });
   if (!r.ok) throw new Error('HTTP ' + r.status);
   return r.json();
 }
 function adopt(remote, version) {
   const ui = S.ui, sync = S.sync;
-  S = merge(clone(DEFAULT), remote); S.ui = ui; S.sync = { ...sync, version, status: 'ok', ts: Date.now() };
+  S = merge(clone(DEFAULT), remote); S.ui = ui; S.sync = { ...sync, version, be: 'drive', status: 'ok', ts: Date.now() };
   try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* ignora */ }
 }
 function paintSync() {
@@ -827,7 +858,7 @@ function paintSync() {
   if (el) el.textContent = syncText();
 }
 function syncText() {
-  if (!S.sync || !S.sync.code) return 'Non collegato: le modifiche restano solo su questo dispositivo.';
+  if (!S.sync || !S.sync.code) return SB && SB.code ? 'Collegamento in corso…' : 'Non collegato: le modifiche restano solo su questo dispositivo.';
   if (S.sync.status === 'offline') return 'Non riesco a raggiungere il servizio: riprovo da solo. Le modifiche sono salvate qui.';
   return S.sync.ts ? 'Collegato. Ultimo salvataggio ' + new Date(S.sync.ts).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }) + '.' : 'Collegato.';
 }
@@ -839,10 +870,10 @@ async function push() {
   if (!canSync()) return;
   pushTimer = null;
   try {
-    const res = await rpc('save_trip', { p_code: S.sync.code, p_data: payload(), p_base_version: S.sync.version || 0 });
+    const res = await api('save', { code: S.sync.code, data: payload(), base: S.sync.version || 0 });
     if (res.ok) { S.sync.version = res.version; S.sync.status = 'ok'; S.sync.ts = Date.now(); try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* ignora */ } }
     else if (res.conflict) { adopt(res.data, res.version); render(); toast('Nel frattempo c’è stata un’altra modifica: ho caricato la versione più recente'); }
-    else toast('Salvataggio online non riuscito' + (res.error ? ': ' + res.error : ''));
+    else toast('Salvataggio non riuscito' + (res.error ? ': ' + res.error : ''));
   } catch (e) { if (S.sync) S.sync.status = 'offline'; }
   paintSync();
 }
@@ -851,27 +882,32 @@ async function pull(silent) {
   const a = document.activeElement;
   if (silent && a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;     // non interrompere chi sta scrivendo
   try {
-    const res = await rpc('get_trip', { p_code: S.sync.code });
-    if (res && res.version > (S.sync.version || 0)) { adopt(res.data, res.version); render(); if (!silent) toast('Aggiornato con le ultime modifiche'); }
-    else if (!res) await push();
-    else { S.sync.status = 'ok'; S.sync.ts = Date.now(); }
+    const v = await api('ver', { code: S.sync.code });
+    if (!v.ok) { S.sync.status = 'offline'; if (!silent) toast(v.error || 'Errore del servizio'); }
+    else if (v.version === 0) await push();                                    // niente ancora su Drive: parte da questo dispositivo
+    else if (v.version !== (S.sync.version || 0)) {
+      const g = await api('get', { code: S.sync.code });
+      if (g.ok && g.exists) { adopt(g.data, g.version); render(); if (!silent) toast('Aggiornato con le ultime modifiche'); }
+    } else { S.sync.status = 'ok'; S.sync.ts = Date.now(); }
   } catch (e) { S.sync.status = 'offline'; }
   paintSync();
 }
-async function connect(code) {
+async function connect(code, quiet) {
   code = String(code || '').trim();
   if (code.length < 16) { toast('Il codice deve avere almeno 16 caratteri'); return; }
-  S.sync = { code, version: 0, status: 'ok', ts: null };
+  S.sync = { code, version: 0, be: 'drive', status: 'ok', ts: null };
   try {
-    const res = await rpc('get_trip', { p_code: code });
-    if (res) { adopt(res.data, res.version); toast('Collegato: ho caricato il viaggio condiviso'); }
-    else { await push(); toast('Collegato: il viaggio è ora salvato online'); }
-  } catch (e) { S.sync.status = 'offline'; toast('Non riesco a collegarmi: controlla la connessione'); }
+    const g = await api('get', { code });
+    if (!g.ok) { delete S.sync; toast(g.error === 'codice errato' ? 'Questo salvataggio è legato a un altro codice' : 'Non riesco a collegarmi' + (g.error ? ': ' + g.error : '')); }
+    else if (g.exists) { adopt(g.data, g.version); if (!quiet) toast('Collegato: ho caricato il viaggio salvato su Drive'); }
+    else { await push(); if (!quiet) toast('Collegato: il viaggio è ora salvato su Drive'); }
+  } catch (e) { S.sync.status = 'offline'; if (!quiet) toast('Non riesco a collegarmi: controlla la connessione'); }
   save(); render(); refreshSettings();
 }
 const newCode = () => { const a = 'abcdefghjkmnpqrstuvwxyz23456789', r = new Uint8Array(24); crypto.getRandomValues(r); return [...r].map(x => a[x % a.length]).join(''); };
 function syncPanel() {
   if (!SB) return '';
+  if (SB.code) return `<p class="small" id="syncstat">${esc(syncText())}</p>`;
   if (!S.sync || !S.sync.code) return `<p><b>Salvataggio condiviso.</b> Crea un codice e passa il link a chi vuoi: vedrete le stesse modifiche. Chi ha il link può modificare, quindi non condividerlo in pubblico.</p>
     <div class="inl"><button class="btn sm" data-act="syncNew">Crea un nuovo codice</button><input type="text" id="synccode" placeholder="oppure incolla un codice" style="width:260px"><button class="btn ghost sm" data-act="syncJoin">Collega</button></div>
     <p class="small" id="syncstat">${esc(syncText())}</p>`;
@@ -883,9 +919,15 @@ function syncPanel() {
 render();
 (function () {
   const m = location.hash.match(/^#v=([a-z0-9]{16,64})$/i);
-  if (m && SB) { history.replaceState(null, '', location.pathname + location.search); if (!S.sync || S.sync.code !== m[1]) connect(m[1]); }
-  else pull(true);
-  setInterval(() => pull(true), 25000);
+  if (SB && SB.code) {
+    // collegamento automatico: lo stesso codice per tutti i dispositivi
+    if (!S.sync || S.sync.code !== SB.code) connect(SB.code, true); else { if (S.sync.be !== 'drive') { S.sync.be = 'drive'; S.sync.version = 0; } pull(true); }
+  } else if (m && SB) { history.replaceState(null, '', location.pathname + location.search); if (!S.sync || S.sync.code !== m[1]) connect(m[1]); }
+  else {
+    if (S.sync && S.sync.be !== 'drive') { S.sync.be = 'drive'; S.sync.version = 0; }     // era collegato al vecchio servizio: riparte da zero
+    pull(true);
+  }
+  setInterval(() => { if (document.visibilityState === 'visible') pull(true); }, 45000);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') pull(true); });
 })();
 (function () {

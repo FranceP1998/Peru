@@ -1,6 +1,6 @@
-// Collegamento a Supabase. La chiave "publishable" è pensata per essere pubblica:
-// da sola non permette di leggere né scrivere nulla (la tabella è bloccata).
-const SUPABASE_CONFIG = {
-  url: 'https://wjhzuzrrkhdaxjhxickd.supabase.co',
-  key: 'sb_publishable_UHXIjrKToXwT5tyWKOOlyQ_MkSq1Fn6'
+// Collegamento automatico al salvataggio su Google Drive.
+// url: indirizzo dell'app web dello script. code: codice che lega questo sito a quel salvataggio.
+const DRIVE_SYNC = {
+  url: 'https://script.google.com/macros/s/AKfycbzQ9l_itZKuyLMzM3BhhzbGjbIdPMdU3PiZfv8hEUys4bvzsHz_fLHEfAhpFLM-CkviUQ/exec',
+  code: '6ptkdbqr62s5kyt8q7tg6psd'
 };
